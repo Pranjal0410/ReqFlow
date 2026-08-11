@@ -3,8 +3,12 @@ import { DetectedRoute } from "../types";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
+// gemini-3.5-flash caps at 20 requests a day on the free tier, which a few
+// scans will burn through. the lite model has its own, much larger allowance.
+const ANALYZE_MODEL = process.env.GEMINI_ANALYZE_MODEL || "gemini-3.1-flash-lite";
+
 export async function analyzeCode(files: { path: string; content: string }[]): Promise<DetectedRoute[]> {
-  const model = genAI.getGenerativeModel({ model: "gemini-3.5-flash" });
+  const model = genAI.getGenerativeModel({ model: ANALYZE_MODEL });
 
   const codeBlock = files
     .map((f) => `// FILE: ${f.path}\n${f.content}`)

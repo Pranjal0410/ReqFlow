@@ -1,7 +1,8 @@
 import React from "react";
-import { View, Text, ScrollView, StyleSheet, Animated, Easing } from "react-native";
+import { View, Text, Pressable, ScrollView, StyleSheet, Animated, Easing } from "react-native";
 import { colors } from "../theme/colors";
-import { radius, shadow } from "../theme/tokens";
+import { radius, shadow, transition } from "../theme/tokens";
+import Icon from "./Icon";
 
 interface TraceStep {
   label: string;
@@ -20,6 +21,7 @@ export default function RuntimeTrace({ response, method, url }: Props) {
   // hooks must run on every render, so the pulse is set up before the
   // early return below
   const pulse = React.useRef(new Animated.Value(1)).current;
+  const [expanded, setExpanded] = React.useState(false);
 
   React.useEffect(() => {
     if (!response) return;
@@ -74,6 +76,20 @@ export default function RuntimeTrace({ response, method, url }: Props) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Runtime Trace</Text>
+        <View style={{ flex: 1 }} />
+        <Pressable
+          style={({ hovered }: any) => [styles.expandBtn, hovered && styles.expandBtnHover]}
+          onPress={() => setExpanded(!expanded)}
+        >
+          <Icon
+            name={expanded ? "chevronDown" : "chevronRight"}
+            size={12}
+            color={colors.textDim}
+          />
+          <Text style={styles.expandText}>
+            {expanded ? "Hide detail" : "View full trace"}
+          </Text>
+        </Pressable>
         <Text style={styles.totalTime}>{total} ms total</Text>
       </View>
 
@@ -101,6 +117,37 @@ export default function RuntimeTrace({ response, method, url }: Props) {
           ))}
         </View>
       </ScrollView>
+
+      {expanded && (
+        <View style={styles.detail}>
+          {steps.map((step, i) => {
+            const share = total > 0 ? Math.round((step.time / total) * 100) : 0;
+            return (
+              <View key={i} style={styles.detailRow}>
+                <View style={[styles.detailDot, { backgroundColor: step.accent }]} />
+                <Text style={styles.detailLabel}>{step.label}</Text>
+                <View style={styles.barTrack}>
+                  <View
+                    style={[
+                      styles.barFill,
+                      { width: `${Math.min(share, 100)}%`, backgroundColor: step.accent },
+                    ]}
+                  />
+                </View>
+                <Text style={styles.detailTime}>
+                  {step.time} ms
+                </Text>
+                <Text style={styles.detailShare}>{share}%</Text>
+              </View>
+            );
+          })}
+
+          <Text style={styles.detailNote}>
+            Only the total round trip is measured. The processing and response
+            figures are derived from it, not timed on the server.
+          </Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -126,6 +173,77 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     fontSize: 12,
     fontWeight: "500",
+    marginLeft: 12,
+  },
+  expandBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  expandBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  expandText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  detail: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 7,
+  },
+  detailDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  detailLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    width: 130,
+  },
+  barTrack: {
+    flex: 1,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: colors.surfaceLight,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: 5,
+    borderRadius: 3,
+  },
+  detailTime: {
+    color: colors.text,
+    fontSize: 11,
+    fontFamily: "monospace",
+    width: 58,
+    textAlign: "right",
+  },
+  detailShare: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+    width: 38,
+    textAlign: "right",
+  },
+  detailNote: {
+    color: colors.textDim,
+    fontSize: 10,
+    lineHeight: 15,
+    marginTop: 6,
   },
   traceRow: {
     flexDirection: "row",

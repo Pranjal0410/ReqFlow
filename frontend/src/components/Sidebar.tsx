@@ -10,7 +10,7 @@ import {
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
-import { DetectedRoute } from "../types";
+import { DetectedRoute, HistoryEntry } from "../types";
 
 interface Props {
   routes: DetectedRoute[];
@@ -19,6 +19,8 @@ interface Props {
   scanning: boolean;
   baseUrl: string;
   onBaseUrlChange: (url: string) => void;
+  history: HistoryEntry[];
+  onSelectHistory: (entry: HistoryEntry) => void;
 }
 
 export default function Sidebar({
@@ -28,7 +30,10 @@ export default function Sidebar({
   scanning,
   baseUrl,
   onBaseUrlChange,
+  history,
+  onSelectHistory,
 }: Props) {
+  const [hovered, setHovered] = React.useState<string | null>(null);
   const [search, setSearch] = React.useState("");
   const [activePath, setActivePath] = React.useState<string | null>(null);
 
@@ -98,30 +103,40 @@ export default function Sidebar({
               const key = `${route.method} ${route.path}`;
               const active = activePath === key;
               return (
-                <Pressable
-                  key={i}
-                  style={({ hovered, pressed }: any) => [
-                    styles.routeItem,
-                    active && styles.routeItemActive,
-                    (hovered || pressed) && styles.routeItemHover,
-                  ]}
-                  onPress={() => {
-                    setActivePath(key);
-                    onSelectRoute(route);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.method,
-                      { color: (colors.method as any)[route.method] || colors.text },
+                <View key={i}>
+                  <Pressable
+                    style={({ hovered: h, pressed }: any) => [
+                      styles.routeItem,
+                      active && styles.routeItemActive,
+                      (h || pressed) && styles.routeItemHover,
                     ]}
+                    onHoverIn={() => setHovered(key)}
+                    onHoverOut={() => setHovered(null)}
+                    onPress={() => {
+                      setActivePath(key);
+                      onSelectRoute(route);
+                    }}
                   >
-                    {route.method}
-                  </Text>
-                  <Text style={[styles.path, active && styles.pathActive]}>
-                    {route.path}
-                  </Text>
-                </Pressable>
+                    <Text
+                      style={[
+                        styles.method,
+                        { color: (colors.method as any)[route.method] || colors.text },
+                      ]}
+                    >
+                      {route.method}
+                    </Text>
+                    <Text style={[styles.path, active && styles.pathActive]}>
+                      {route.path}
+                    </Text>
+                  </Pressable>
+
+                  {/* hover only, so this never appears on a phone */}
+                  {hovered === key && !!route.description && (
+                    <View style={styles.tooltip}>
+                      <Text style={styles.tooltipText}>{route.description}</Text>
+                    </View>
+                  )}
+                </View>
               );
             })}
           </View>
@@ -135,6 +150,45 @@ export default function Sidebar({
               Scan a Node.js project folder and ReqFlow will list every route it
               finds.
             </Text>
+          </View>
+        )}
+
+        {history.length > 0 && (
+          <View style={styles.historyBlock}>
+            <View style={styles.groupHeader}>
+              <Text style={styles.groupTitle}>Recent</Text>
+              <Text style={styles.groupCount}>{history.length}</Text>
+            </View>
+            {history.map((h) => (
+              <Pressable
+                key={h.id}
+                style={({ hovered: hv }: any) => [
+                  styles.routeItem,
+                  hv && styles.routeItemHover,
+                ]}
+                onPress={() => onSelectHistory(h)}
+              >
+                <Text
+                  style={[
+                    styles.method,
+                    { color: (colors.method as any)[h.method] || colors.text },
+                  ]}
+                >
+                  {h.method}
+                </Text>
+                <Text style={styles.historyPath} numberOfLines={1}>
+                  {h.url.replace(/^https?:\/\/[^/]+/, "") || "/"}
+                </Text>
+                <Text
+                  style={[
+                    styles.historyStatus,
+                    { color: h.status > 0 && h.status < 400 ? colors.statusOk : colors.statusErr },
+                  ]}
+                >
+                  {h.status || "err"}
+                </Text>
+              </Pressable>
+            ))}
           </View>
         )}
 
@@ -271,6 +325,37 @@ const styles = StyleSheet.create({
   },
   pathActive: {
     color: colors.text,
+  },
+  tooltip: {
+    marginTop: 2,
+    marginBottom: 4,
+    marginLeft: 10,
+    backgroundColor: colors.surfaceLight,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.border,
+    borderRadius: radius.sm,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    ...shadow.sm,
+  },
+  tooltipText: {
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  historyBlock: {
+    marginTop: 6,
+  },
+  historyPath: {
+    flex: 1,
+    color: colors.textDim,
+    fontSize: 12,
+    fontFamily: "monospace",
+  },
+  historyStatus: {
+    fontSize: 11,
+    fontFamily: "monospace",
+    fontWeight: "500",
   },
   empty: {
     alignItems: "center",

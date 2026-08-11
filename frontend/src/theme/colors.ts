@@ -32,6 +32,16 @@ export const colors = {
   // json bodies read better in a soft mint than in plain white
   code: "#8ee7b8",
 
+  // json syntax highlighting. purple only lives here, the ui chrome stays neutral
+  json: {
+    key: "#a78bfa",
+    string: "#8ee7b8",
+    number: "#f5a524",
+    boolean: "#60a5fa",
+    null: "#6b7280",
+    punctuation: "#6b7280",
+  },
+
   // runtime trace step accents, mirroring the stat card bars in the reference
   traceRequest: "#4ade80",
   traceProcessing: "#60a5fa",

@@ -24,6 +24,7 @@ export default function SubTabs({ activeSubTab, onSelect, headerCount, hasBody }
     { key: "headers", label: "Headers", count: headerCount },
     { key: "body", label: "Body", hasDot: hasBody },
     { key: "auth", label: "Auth" },
+    { key: "prerequest", label: "Pre-request" },
     { key: "tests", label: "Tests" },
   ];
 

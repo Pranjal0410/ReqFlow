@@ -1,5 +1,5 @@
 import React from "react";
-import Svg, { Path, Circle, Polyline } from "react-native-svg";
+import Svg, { Path, Circle, Polyline, Rect } from "react-native-svg";
 import { colors } from "../theme/colors";
 
 // stroke icons instead of emoji and typographic glyphs. emoji render
@@ -10,6 +10,10 @@ export type IconName =
   | "send"
   | "arrowRight"
   | "chevronDown"
+  | "chevronRight"
+  | "copy"
+  | "terminal"
+  | "history"
   | "check"
   | "circle"
   | "x"
@@ -55,6 +59,25 @@ export default function Icon({ name, size = 16, color = colors.textDim }: Props)
         </>
       )}
       {name === "chevronDown" && <Path d="m6 9 6 6 6-6" {...common} />}
+      {name === "chevronRight" && <Path d="m9 6 6 6-6 6" {...common} />}
+      {name === "copy" && (
+        <>
+          <Rect x="9" y="9" width="11" height="11" rx="2" {...common} />
+          <Path d="M5 15V5a2 2 0 0 1 2-2h10" {...common} />
+        </>
+      )}
+      {name === "terminal" && (
+        <>
+          <Path d="m5 8 4 4-4 4" {...common} />
+          <Path d="M13 16h6" {...common} />
+        </>
+      )}
+      {name === "history" && (
+        <>
+          <Circle cx="12" cy="12" r="9" {...common} />
+          <Polyline points="12 7 12 12 16 13" {...common} />
+        </>
+      )}
       {name === "check" && <Path d="M20 6 9 17l-5-5" {...common} />}
       {name === "circle" && <Circle cx="12" cy="12" r="7" {...common} />}
       {name === "x" && (

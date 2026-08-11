@@ -8,13 +8,16 @@ import {
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+import { Platform } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Clipboard from "expo-clipboard";
 import { colors } from "../theme/colors";
 import { radius, shadow, glow, transition } from "../theme/tokens";
 import Icon from "./Icon";
 import SubTabs from "./SubTabs";
 import HeadersEditor from "./HeadersEditor";
 import TestRunner from "./TestRunner";
+import ResponseViewer from "./ResponseViewer";
 import { SubTab, TestCase } from "../types";
 
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
@@ -58,6 +61,46 @@ export default function RequestBuilder({
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
+  const [curlCopied, setCurlCopied] = React.useState(false);
+  const [formatError, setFormatError] = React.useState<string | null>(null);
+  const [preScript, setPreScript] = React.useState("");
+
+  // ctrl+enter / cmd+enter sends. web only, a phone has no such shortcut.
+  React.useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const onKey = (e: any) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+        e.preventDefault();
+        if (!loading) onSend();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onSend, loading]);
+
+  const formatBody = () => {
+    if (!body.trim()) return;
+    try {
+      onBodyChange(JSON.stringify(JSON.parse(body), null, 2));
+      setFormatError(null);
+    } catch (err: any) {
+      setFormatError(err.message);
+    }
+  };
+
+  const copyAsCurl = async () => {
+    const parts = [`curl -X ${method}`, `'${url}'`];
+    headers
+      .filter((h) => h.enabled && h.key.trim())
+      .forEach((h) => parts.push(`-H '${h.key}: ${h.value}'`));
+    if (["POST", "PUT", "PATCH"].includes(method) && body.trim()) {
+      // single quotes inside the body would end the shell quote early
+      parts.push(`-d '${body.replace(/'/g, "'\\''")}'`);
+    }
+    await Clipboard.setStringAsync(parts.join(" \\\n  "));
+    setCurlCopied(true);
+    setTimeout(() => setCurlCopied(false), 1600);
+  };
 
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
@@ -88,6 +131,20 @@ export default function RequestBuilder({
           autoCapitalize="none"
           autoCorrect={false}
         />
+
+        <Pressable
+          style={({ hovered }: any) => [styles.curlBtn, hovered && styles.curlBtnHover]}
+          onPress={copyAsCurl}
+        >
+          <Icon
+            name={curlCopied ? "check" : "terminal"}
+            size={14}
+            color={curlCopied ? colors.statusOk : colors.textDim}
+          />
+          <Text style={[styles.curlText, curlCopied && { color: colors.statusOk }]}>
+            {curlCopied ? "Copied" : "cURL"}
+          </Text>
+        </Pressable>
 
         <Pressable
           style={({ pressed }: any) => [
@@ -159,6 +216,23 @@ export default function RequestBuilder({
 
         {activeSubTab === "body" && (
           <View style={styles.bodySection}>
+            <View style={styles.bodyToolbar}>
+              <Pressable
+                style={({ hovered }: any) => [styles.smallBtn, hovered && styles.smallBtnHover]}
+                onPress={formatBody}
+              >
+                <Text style={styles.smallBtnText}>Format JSON</Text>
+              </Pressable>
+              {formatError && (
+                <Text style={styles.formatError} numberOfLines={1}>
+                  {formatError}
+                </Text>
+              )}
+              <View style={{ flex: 1 }} />
+              <Text style={styles.hint}>
+                {Platform.OS === "web" ? "Ctrl+Enter to send" : ""}
+              </Text>
+            </View>
             <TextInput
               style={styles.bodyInput}
               multiline
@@ -203,54 +277,32 @@ export default function RequestBuilder({
           </View>
         )}
 
+        {activeSubTab === "prerequest" && (
+          <View style={styles.bodySection}>
+            <Text style={styles.authLabel}>
+              Runs before the request is sent. Not wired up yet, nothing here is
+              executed.
+            </Text>
+            <TextInput
+              style={[styles.bodyInput, styles.scriptInput]}
+              multiline
+              value={preScript}
+              onChangeText={setPreScript}
+              placeholder={"// set a header from a previous response\n// req.headers['Authorization'] = 'Bearer ' + token"}
+              placeholderTextColor={colors.textDim}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textAlignVertical="top"
+            />
+          </View>
+        )}
+
         {activeSubTab === "tests" && (
           <TestRunner tests={tests} onChange={onTestsChange} response={response} />
         )}
       </View>
 
-      {/* response */}
-      {response && (
-        <View style={styles.responseSection}>
-          <View style={styles.responseDivider} />
-
-          <View style={styles.responseHeader}>
-            <View
-              style={[
-                styles.statusBadge,
-                {
-                  backgroundColor: ok ? "rgba(74, 222, 128, 0.14)" : "rgba(248, 113, 113, 0.14)",
-                },
-                glow(ok ? colors.statusOk : colors.statusErr),
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusText,
-                  { color: ok ? colors.statusOk : colors.statusErr },
-                ]}
-              >
-                {response.status} {response.statusText}
-              </Text>
-            </View>
-            <View style={styles.metaItem}>
-              <Icon name="clock" size={13} color={colors.textDim} />
-              <Text style={styles.timing}>{response.timing.total} ms</Text>
-            </View>
-            <View style={styles.metaItem}>
-              <Icon name="weight" size={13} color={colors.textDim} />
-              <Text style={styles.timing}>
-                {new Blob([JSON.stringify(response.data)]).size} B
-              </Text>
-            </View>
-          </View>
-
-          <ScrollView style={styles.responseBody}>
-            <Text style={styles.responseText}>
-              {JSON.stringify(response.data, null, 2)}
-            </Text>
-          </ScrollView>
-        </View>
-      )}
+      <ResponseViewer response={response} />
     </View>
   );
 }
@@ -293,6 +345,60 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     ...shadow.sm,
     ...transition("box-shadow, background-color"),
+  },
+  curlBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceLight,
+    ...shadow.sm,
+    ...transition("background-color"),
+  },
+  curlBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  curlText: {
+    color: colors.textDim,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  bodyToolbar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 8,
+  },
+  smallBtn: {
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceLight,
+    ...transition("background-color"),
+  },
+  smallBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  smallBtnText: {
+    color: colors.text,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  formatError: {
+    flex: 1,
+    color: colors.statusErr,
+    fontSize: 11,
+  },
+  hint: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontFamily: "monospace",
+  },
+  scriptInput: {
+    color: colors.textMuted,
+    minHeight: 140,
   },
   sendBtnWrap: {
     borderRadius: radius.md,

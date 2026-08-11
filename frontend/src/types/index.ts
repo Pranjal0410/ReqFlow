@@ -36,4 +36,19 @@ export interface RequestTab {
   tests: TestCase[];
 }
 
-export type SubTab = "params" | "headers" | "body" | "auth" | "tests";
+export type SubTab =
+  | "params"
+  | "headers"
+  | "body"
+  | "auth"
+  | "prerequest"
+  | "tests";
+
+export interface HistoryEntry {
+  id: string;
+  method: string;
+  url: string;
+  status: number;
+  timing: number;
+  at: number;
+}

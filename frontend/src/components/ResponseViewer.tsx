@@ -1,0 +1,272 @@
+import React from "react";
+import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
+import * as Clipboard from "expo-clipboard";
+import { colors } from "../theme/colors";
+import { radius, shadow, glow, transition } from "../theme/tokens";
+import Icon from "./Icon";
+import JsonView from "./JsonView";
+
+interface Props {
+  response: any;
+}
+
+function byteLength(data: any) {
+  try {
+    return new Blob([typeof data === "string" ? data : JSON.stringify(data)]).size;
+  } catch {
+    return 0;
+  }
+}
+
+export default function ResponseViewer({ response }: Props) {
+  const [raw, setRaw] = React.useState(false);
+  const [showHeaders, setShowHeaders] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+
+  if (!response) return null;
+
+  const ok = response.status < 400;
+  const headerEntries = Object.entries(response.headers || {});
+
+  const copy = async () => {
+    const text =
+      typeof response.data === "string"
+        ? response.data
+        : JSON.stringify(response.data, null, 2);
+    await Clipboard.setStringAsync(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.divider} />
+
+      <View style={styles.header}>
+        <View
+          style={[
+            styles.statusBadge,
+            {
+              backgroundColor: ok
+                ? "rgba(74, 222, 128, 0.14)"
+                : "rgba(248, 113, 113, 0.14)",
+            },
+            glow(ok ? colors.statusOk : colors.statusErr),
+          ]}
+        >
+          <Text
+            style={[
+              styles.statusText,
+              { color: ok ? colors.statusOk : colors.statusErr },
+            ]}
+          >
+            {response.status} {response.statusText}
+          </Text>
+        </View>
+
+        <View style={styles.metaItem}>
+          <Icon name="clock" size={13} color={colors.textDim} />
+          <Text style={styles.meta}>{response.timing.total} ms</Text>
+        </View>
+
+        <View style={styles.metaItem}>
+          <Icon name="weight" size={13} color={colors.textDim} />
+          <Text style={styles.meta}>{byteLength(response.data)} B</Text>
+        </View>
+
+        <View style={{ flex: 1 }} />
+
+        {/* pretty / raw */}
+        <View style={styles.segmented}>
+          <Pressable
+            style={[styles.segment, !raw && styles.segmentOn]}
+            onPress={() => setRaw(false)}
+          >
+            <Text style={[styles.segmentText, !raw && styles.segmentTextOn]}>Pretty</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.segment, raw && styles.segmentOn]}
+            onPress={() => setRaw(true)}
+          >
+            <Text style={[styles.segmentText, raw && styles.segmentTextOn]}>Raw</Text>
+          </Pressable>
+        </View>
+
+        <Pressable
+          style={({ hovered }: any) => [styles.action, hovered && styles.actionHover]}
+          onPress={copy}
+        >
+          <Icon
+            name={copied ? "check" : "copy"}
+            size={13}
+            color={copied ? colors.statusOk : colors.textDim}
+          />
+          <Text style={[styles.actionText, copied && { color: colors.statusOk }]}>
+            {copied ? "Copied" : "Copy"}
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* response headers */}
+      <Pressable
+        style={({ hovered }: any) => [styles.headersToggle, hovered && styles.actionHover]}
+        onPress={() => setShowHeaders(!showHeaders)}
+      >
+        <Icon
+          name={showHeaders ? "chevronDown" : "chevronRight"}
+          size={13}
+          color={colors.textDim}
+        />
+        <Text style={styles.headersToggleText}>
+          Response headers ({headerEntries.length})
+        </Text>
+      </Pressable>
+
+      {showHeaders && (
+        <ScrollView style={styles.headersBox} nestedScrollEnabled>
+          {headerEntries.map(([k, v]) => (
+            <View key={k} style={styles.headerRow}>
+              <Text style={styles.headerKey}>{k}</Text>
+              <Text style={styles.headerValue} selectable>
+                {String(v)}
+              </Text>
+            </View>
+          ))}
+          {headerEntries.length === 0 && (
+            <Text style={styles.headerValue}>no headers returned</Text>
+          )}
+        </ScrollView>
+      )}
+
+      <ScrollView style={styles.body} nestedScrollEnabled>
+        <JsonView data={response.data} raw={raw} />
+      </ScrollView>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  section: {
+    flex: 1,
+    paddingHorizontal: 12,
+    paddingBottom: 12,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginBottom: 12,
+  },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    marginBottom: 8,
+  },
+  statusBadge: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: radius.md,
+  },
+  statusText: {
+    fontWeight: "500",
+    fontSize: 13,
+  },
+  metaItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  meta: {
+    color: colors.textDim,
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  segmented: {
+    flexDirection: "row",
+    backgroundColor: colors.surfaceLight,
+    borderRadius: radius.sm,
+    padding: 2,
+  },
+  segment: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radius.sm - 2,
+    ...transition("background-color"),
+  },
+  segmentOn: {
+    backgroundColor: colors.hover,
+  },
+  segmentText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  segmentTextOn: {
+    color: colors.text,
+  },
+  action: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  actionHover: {
+    backgroundColor: colors.hover,
+  },
+  actionText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  headersToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    alignSelf: "flex-start",
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    borderRadius: radius.sm,
+    marginBottom: 6,
+    ...transition("background-color"),
+  },
+  headersToggleText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  headersBox: {
+    maxHeight: 140,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: 10,
+    marginBottom: 8,
+    ...shadow.sm,
+  },
+  headerRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginBottom: 3,
+  },
+  headerKey: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: "monospace",
+    width: 170,
+  },
+  headerValue: {
+    flex: 1,
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+  },
+  body: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: 12,
+    ...shadow.sm,
+  },
+});

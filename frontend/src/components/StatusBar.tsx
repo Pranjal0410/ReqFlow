@@ -17,14 +17,14 @@ export default function AppStatusBar({
 }: Props) {
   const host = target ? target.replace(/^https?:\/\//, "") : null;
 
-  // the wording follows the real check, it does not claim everything is fine
-  // just because the app is open
+  // one origin is polled, so the label names that origin. saying "all services
+  // operational" would be claiming something never checked
   const state = !host
     ? { color: colors.textDim, label: "No target selected" }
     : targetUp === null
     ? { color: colors.textDim, label: `Checking ${host}` }
     : targetUp
-    ? { color: colors.statusOk, label: "All services operational" }
+    ? { color: colors.statusOk, label: `${host} responding` }
     : { color: colors.statusErr, label: `${host} not responding` };
 
   return (

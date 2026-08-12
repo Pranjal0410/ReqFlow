@@ -13,6 +13,7 @@ import { analyzeProject, sendRequest, checkTarget } from "./src/services/api";
 import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
+import { runAssertions } from "./src/lib/assertions";
 
 function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
@@ -149,7 +150,14 @@ export default function App() {
         });
 
       const res = await sendRequest(activeTab.method, activeTab.url, headerObj, parsedBody);
-      updateActiveTab({ response: res, loading: false });
+
+      // assertions run on their own after every send. having to remember a
+      // second button was the only way to ever see a result before.
+      updateActiveTab({
+        response: res,
+        loading: false,
+        tests: runAssertions(activeTab.tests, res),
+      });
 
       setHistory((prev) =>
         [
@@ -178,7 +186,12 @@ export default function App() {
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
 
-      <TopBar projectName={projectName} target={target} targetUp={targetUp} />
+      <TopBar
+        projectName={projectName}
+        routeCount={routes.length}
+        target={target}
+        targetUp={targetUp}
+      />
 
       <View style={styles.main}>
         <Sidebar

@@ -43,7 +43,7 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
       id: "welcome",
       role: "assistant",
       content:
-        "Hi! I can help you with API development. You can ask me to:\n\n• test endpoints\n• generate requests\n• explain APIs\n• debug issues\n• create tests",
+        "I can send real requests to the API you are pointed at, so ask me to:\n\n• test endpoints, one or all of them\n• explain what an endpoint does\n• debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine.\n\nOne limit worth knowing: I can describe a request or an assertion, but I cannot put it into your tabs for you.",
     },
   ]);
   const [input, setInput] = useState("");

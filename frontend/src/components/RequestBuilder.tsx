@@ -273,7 +273,10 @@ export default function RequestBuilder({
 
         {activeSubTab === "params" && (
           <View style={styles.authSection}>
-            <Text style={styles.authLabel}>Query parameters are parsed from the URL automatically</Text>
+            <Text style={styles.authLabel}>
+              There is no separate editor for query parameters yet. Put them in
+              the URL and they are sent as typed.
+            </Text>
           </View>
         )}
 

@@ -5,13 +5,14 @@ import { radius, shadow } from "../theme/tokens";
 
 interface Props {
   projectName: string;
+  routeCount: number;
   // origin of the server the active request points at, e.g. http://localhost:3001
   target: string | null;
   // true up, false unreachable, null not checked yet or no target
   targetUp: boolean | null;
 }
 
-export default function TopBar({ projectName, target, targetUp }: Props) {
+export default function TopBar({ projectName, routeCount, target, targetUp }: Props) {
   const host = target ? target.replace(/^https?:\/\//, "") : null;
 
   const state = !host
@@ -33,7 +34,11 @@ export default function TopBar({ projectName, target, targetUp }: Props) {
         </View>
         <View>
           <Text style={styles.projectName}>{projectName || "ReqFlow"}</Text>
-          <Text style={styles.projectType}>Node.js Project</Text>
+          <Text style={styles.projectType}>
+            {routeCount > 0
+              ? `${routeCount} endpoint${routeCount === 1 ? "" : "s"}`
+              : "nothing scanned yet"}
+          </Text>
         </View>
       </View>
 

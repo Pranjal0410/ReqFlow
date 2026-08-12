@@ -85,10 +85,18 @@ async function runTool(call: FunctionCall, allowWrites: boolean) {
     body: parseJsonArg(args.body),
   });
 
+  if (result.blocked) {
+    return {
+      refused: true,
+      error: `${url} is outside the local network, which ReqFlow does not proxy. Tell the user and do not retry.`,
+    };
+  }
+
   return {
     status: result.status,
     statusText: result.statusText,
     timingMs: result.timing.total,
+    ttfbMs: result.timing.ttfb,
     // keep the payload small so long test runs do not blow up the context
     body: JSON.stringify(result.data).slice(0, 4000),
   };

@@ -14,6 +14,7 @@ import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
+import { loadWorkspace, saveWorkspace } from "./src/lib/persist";
 
 function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
@@ -41,6 +42,46 @@ export default function App() {
   const [projectName, setProjectName] = useState("ReqFlow");
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+
+  // nothing is written back until the saved workspace has been read, otherwise
+  // the empty first render would immediately overwrite it
+  const [hydrated, setHydrated] = useState(false);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await loadWorkspace();
+      if (!cancelled && saved) {
+        setBaseUrl(saved.baseUrl || CONFIG.DEFAULT_TARGET);
+        setProjectName(saved.projectName);
+        setRoutes(saved.routes);
+        setTabs(saved.tabs);
+        setActiveTabId(saved.activeTabId);
+        setHistory(saved.history);
+      }
+      if (!cancelled) setHydrated(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // debounced so typing in the url bar does not write on every keystroke
+  React.useEffect(() => {
+    if (!hydrated) return;
+    const id = setTimeout(() => {
+      saveWorkspace({
+        version: 1,
+        baseUrl,
+        projectName,
+        routes,
+        tabs,
+        activeTabId,
+        history,
+      });
+    }, 400);
+    return () => clearTimeout(id);
+  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 

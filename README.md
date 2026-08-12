@@ -23,7 +23,10 @@ curl command.
 **Shows what actually happened.** Status, response headers, syntax highlighted
 JSON, and a timing breakdown. The timings are measured, not estimated: the
 backend reads the response as a stream so the wait for the first byte and the
-time spent reading the body are two separate numbers.
+time spent reading the body are two separate numbers. If the server you are
+testing sends a `Server-Timing` header, whatever it reports about itself, its
+controller, its queries, shows up in the trace as well, tagged `reported`
+because those numbers are its word rather than our measurement.
 
 **Runs assertions.** Write checks like `status equals 200` or
 `data.token exists` and they run on every send.
@@ -65,8 +68,9 @@ backend.
 cd backend && npm test
 ```
 
-26 tests over the proxy, the analyze route, the file reader and the target
-guard. They spin up their own throwaway server instead of calling a public API,
+39 tests over the proxy, the analyze route, the file reader, the target guard
+and the Server-Timing parser. They spin up their own throwaway server instead of
+calling a public API,
 and Gemini is mocked, so they run offline and cost nothing.
 
 ## How it is put together
@@ -74,7 +78,7 @@ and Gemini is mocked, so they run offline and cost nothing.
 ```
 backend/
   routes/      analyze, proxy, ai-chat
-  services/    fileReader, gemini, proxy, targetGuard
+  services/    fileReader, gemini, proxy, serverTiming, targetGuard
 frontend/
   components/  sidebar, tabs, request builder, response viewer, trace, agent
   lib/         assertions, persistence

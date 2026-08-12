@@ -1,6 +1,7 @@
 import axios, { AxiosError } from "axios";
 import { ProxyRequest, ProxyResponse } from "../types";
 import { isPrivateTarget, TARGET_BLOCKED_MESSAGE } from "./targetGuard";
+import { parseServerTiming } from "./serverTiming";
 
 function emptyTiming(total: number) {
   return { total, ttfb: 0, download: 0 };
@@ -21,6 +22,7 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
       timing: emptyTiming(0),
       size: 0,
       sizeSource: "measured",
+      serverTiming: [],
       blocked: true,
     };
   }
@@ -78,6 +80,7 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
       timing: { total, ttfb, download: Math.max(total - ttfb, 0) },
       size: hasDeclared ? declared : measured,
       sizeSource: hasDeclared ? "content-length" : "measured",
+      serverTiming: parseServerTiming(response.headers["server-timing"]),
     };
   } catch (err) {
     const total = Date.now() - start;
@@ -91,6 +94,7 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
       timing: emptyTiming(total),
       size: 0,
       sizeSource: "measured",
+      serverTiming: [],
     };
   }
 }

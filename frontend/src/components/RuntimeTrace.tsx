@@ -2,13 +2,21 @@ import React from "react";
 import { View, Text, Pressable, ScrollView, StyleSheet, Animated, Easing } from "react-native";
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
+import { ServerTimingSpan } from "../types";
 import Icon from "./Icon";
 
 interface TraceStep {
   label: string;
   detail: string;
-  time: number;
+  // what the card's bottom line reads. not always a duration: the response
+  // card carries a size, and a server span with no dur carries nothing.
+  value: string;
+  // null when the step has no duration to put on a bar in the expanded view
+  time: number | null;
   accent: string;
+  // true for the spans the target server reported about itself. the ui says so
+  // out loud, because those numbers are its word and not our measurement.
+  reported?: boolean;
 }
 
 interface Props {
@@ -23,6 +31,25 @@ function safePath(url: string) {
   } catch {
     return url;
   }
+}
+
+// server-timing durations arrive as fractions of a millisecond fairly often.
+// keep one decimal for those instead of rounding a 0.4 ms span down to nothing.
+function ms(value: number) {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1);
+}
+
+function serverSteps(spans: ServerTimingSpan[]): TraceStep[] {
+  return spans.map((span) => ({
+    label: span.name,
+    detail: span.description || "server span",
+    // the header may name a span without timing it, and an untimed span is
+    // still worth showing. it just has no number to show with it.
+    value: span.duration === null ? "no duration sent" : `${ms(span.duration)} ms`,
+    time: span.duration,
+    accent: colors.traceProcessing,
+    reported: true,
+  }));
 }
 
 export default function RuntimeTrace({ response, method, url }: Props) {
@@ -56,23 +83,46 @@ export default function RuntimeTrace({ response, method, url }: Props) {
 
   if (!response) return null;
 
-  // build trace steps from the response data
   const total = response.timing.total;
+  const spans: ServerTimingSpan[] = response.serverTiming ?? [];
 
-  // both figures come from the backend, which times the wait for the first
-  // byte separately from reading the body. nothing here is a guess.
+  // the two figures we measure ourselves. the backend times the wait for the
+  // first byte separately from reading the body, so neither is a guess.
+  const ttfb = response.timing.ttfb ?? 0;
+  const download = response.timing.download ?? 0;
+
+  // the server's own spans go between the wait and the download, because that
+  // is when they happened: everything it reports took place inside the ttfb
+  // window, before the first byte reached us.
   const steps: TraceStep[] = [
     {
-      label: "Waiting (TTFB)",
+      label: "HTTP Request",
       detail: `${method} ${safePath(url)}`,
-      time: response.timing.ttfb ?? 0,
+      value: `${ms(total)} ms total`,
+      time: total,
       accent: colors.traceRequest,
     },
     {
+      label: "Waiting (TTFB)",
+      detail: "until first byte",
+      value: `${ms(ttfb)} ms`,
+      time: ttfb,
+      accent: colors.traceRequest,
+    },
+    ...serverSteps(spans),
+    {
       label: "Download",
       detail: `${response.size ?? 0} B body`,
-      time: response.timing.download ?? 0,
+      value: `${ms(download)} ms`,
+      time: download,
       accent: colors.traceProcessing,
+    },
+    {
+      label: "Response",
+      detail: `${response.status} ${response.statusText || ""}`.trim(),
+      value: `${response.size ?? 0} B`,
+      time: null,
+      accent: colors.traceResponse,
     },
   ];
 
@@ -85,51 +135,49 @@ export default function RuntimeTrace({ response, method, url }: Props) {
           style={({ hovered }: any) => [styles.expandBtn, hovered && styles.expandBtnHover]}
           onPress={() => setExpanded(!expanded)}
         >
+          <Text style={styles.expandText}>
+            {expanded ? "Hide detail" : "View full trace"}
+          </Text>
           <Icon
             name={expanded ? "chevronDown" : "chevronRight"}
             size={12}
             color={colors.textDim}
           />
-          <Text style={styles.expandText}>
-            {expanded ? "Hide detail" : "View full trace"}
-          </Text>
         </Pressable>
-        <Text style={styles.totalTime}>{total} ms total</Text>
       </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false}>
         <View style={styles.traceRow}>
           {steps.map((step, i) => (
-            <React.Fragment key={i}>
-              <View style={[styles.traceCard, { borderLeftColor: step.accent }]}>
-                <Text style={[styles.traceLabel, { color: step.accent }]}>{step.label}</Text>
-                <Text style={styles.traceDetail}>{step.detail}</Text>
-                <Animated.Text style={[styles.traceTime, { opacity: pulse }]}>
-                  {step.time} ms
-                </Animated.Text>
+            <View key={i} style={[styles.traceCard, { borderLeftColor: step.accent }]}>
+              <View style={styles.traceLabelRow}>
+                <Text style={[styles.traceLabel, { color: step.accent }]} numberOfLines={1}>
+                  {step.label}
+                </Text>
+                {step.reported && <Text style={styles.reportedTag}>reported</Text>}
               </View>
-
-              {/* connector: a thin line with a dot rather than an arrow glyph */}
-              {i < steps.length - 1 && (
-                <View style={styles.connector}>
-                  <View style={styles.connectorLine} />
-                  <View style={[styles.connectorDot, { backgroundColor: steps[i + 1].accent }]} />
-                  <View style={styles.connectorLine} />
-                </View>
-              )}
-            </React.Fragment>
+              <Text style={styles.traceDetail} numberOfLines={1}>
+                {step.detail}
+              </Text>
+              <Animated.Text style={[styles.traceTime, { opacity: pulse }]}>
+                {step.value}
+              </Animated.Text>
+            </View>
           ))}
         </View>
       </ScrollView>
 
       {expanded && (
         <View style={styles.detail}>
-          {steps.map((step, i) => {
+          {steps.slice(1).map((step, i) => {
+            if (step.time === null) return null;
             const share = total > 0 ? Math.round((step.time / total) * 100) : 0;
             return (
               <View key={i} style={styles.detailRow}>
                 <View style={[styles.detailDot, { backgroundColor: step.accent }]} />
-                <Text style={styles.detailLabel}>{step.label}</Text>
+                <Text style={styles.detailLabel} numberOfLines={1}>
+                  {step.label}
+                </Text>
                 <View style={styles.barTrack}>
                   <View
                     style={[
@@ -138,9 +186,7 @@ export default function RuntimeTrace({ response, method, url }: Props) {
                     ]}
                   />
                 </View>
-                <Text style={styles.detailTime}>
-                  {step.time} ms
-                </Text>
+                <Text style={styles.detailTime}>{ms(step.time)} ms</Text>
                 <Text style={styles.detailShare}>{share}%</Text>
               </View>
             );
@@ -160,6 +206,12 @@ export default function RuntimeTrace({ response, method, url }: Props) {
             Measured on the ReqFlow backend. TTFB is the wait for the first byte,
             download is the time spent reading the body. Time spent between your
             browser and ReqFlow itself is not included.
+          </Text>
+
+          <Text style={styles.detailNote}>
+            {spans.length > 0
+              ? "Steps marked reported come from the target server's Server-Timing header. They are its own account of what it did inside the wait above, so they need not add up to it."
+              : "This server sent no Server-Timing header, so what it did between receiving the request and answering is not visible from out here. Add the header on the server to see those steps."}
           </Text>
         </View>
       )}
@@ -182,13 +234,7 @@ const styles = StyleSheet.create({
   title: {
     color: colors.text,
     fontSize: 13,
-    fontWeight: "500",
-  },
-  totalTime: {
-    color: colors.textDim,
-    fontSize: 12,
-    fontWeight: "500",
-    marginLeft: 12,
+    fontWeight: "600",
   },
   expandBtn: {
     flexDirection: "row",
@@ -262,20 +308,33 @@ const styles = StyleSheet.create({
   },
   traceRow: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "stretch",
+    gap: 10,
   },
   traceCard: {
     backgroundColor: colors.surfaceLight,
     borderRadius: radius.md,
-    padding: 12,
-    minWidth: 150,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+    minWidth: 158,
     borderLeftWidth: 3,
     ...shadow.sm,
   },
+  traceLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
   traceLabel: {
     fontSize: 12,
-    fontWeight: "500",
-    marginBottom: 3,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
+  reportedTag: {
+    color: colors.textDim,
+    fontSize: 9,
+    letterSpacing: 0.3,
   },
   traceDetail: {
     color: colors.textMuted,
@@ -284,25 +343,8 @@ const styles = StyleSheet.create({
     marginBottom: 5,
   },
   traceTime: {
-    color: colors.text,
+    color: colors.textDim,
     fontSize: 11,
-    fontWeight: "500",
     fontFamily: "monospace",
-  },
-  connector: {
-    flexDirection: "row",
-    alignItems: "center",
-    width: 34,
-  },
-  connectorLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  connectorDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    marginHorizontal: 3,
   },
 });

@@ -49,6 +49,13 @@ beforeAll(async () => {
   target.use(express.json());
   target.get("/thing", (req, res) => res.json({ name: "widget", id: 7 }));
   target.post("/echo", (req, res) => res.status(201).json({ received: req.body }));
+  target.get("/traced", (req, res) => {
+    res.set(
+      "Server-Timing",
+      'controller;dur=15, service;dur=32, db;dur=18;desc="INSERT INTO users"'
+    );
+    res.json({ ok: true });
+  });
 
   await new Promise<void>((resolve) => {
     upstream = target.listen(0, () => resolve());
@@ -198,6 +205,26 @@ describe("POST /api/proxy", () => {
     expect(res.body.size).toBe(
       Buffer.byteLength(JSON.stringify({ name: "widget", id: 7 }))
     );
+  });
+
+  it("passes through the spans a server reports about itself", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/traced` });
+
+    expect(res.body.serverTiming).toEqual([
+      { name: "controller", description: null, duration: 15 },
+      { name: "service", description: null, duration: 32 },
+      { name: "db", description: "INSERT INTO users", duration: 18 },
+    ]);
+  });
+
+  it("reports no spans for a server that sends no Server-Timing header", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/thing` });
+
+    expect(res.body.serverTiming).toEqual([]);
   });
 
   it("handles an unreachable server without crashing", async () => {

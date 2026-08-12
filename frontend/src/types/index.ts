@@ -6,6 +6,14 @@ export interface DetectedRoute {
     body: Record<string, any> | null;
   }
   
+  // one metric out of the target server's Server-Timing header. duration is
+  // null when the server named a span but sent no dur for it.
+  export interface ServerTimingSpan {
+    name: string;
+    description: string | null;
+    duration: number | null;
+  }
+
   export interface ApiResponse {
     status: number;
     statusText: string;
@@ -21,6 +29,9 @@ export interface DetectedRoute {
     // bytes. content-length when the server sent one, otherwise what we read
     size: number;
     sizeSource: "content-length" | "measured";
+    // reported by the target server, not measured here. optional because a
+    // workspace saved before this existed will not have it.
+    serverTiming?: ServerTimingSpan[];
     blocked?: boolean;
   }
 

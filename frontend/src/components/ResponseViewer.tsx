@@ -10,14 +10,6 @@ interface Props {
   response: any;
 }
 
-function byteLength(data: any) {
-  try {
-    return new Blob([typeof data === "string" ? data : JSON.stringify(data)]).size;
-  } catch {
-    return 0;
-  }
-}
-
 export default function ResponseViewer({ response }: Props) {
   const [raw, setRaw] = React.useState(false);
   const [showHeaders, setShowHeaders] = React.useState(false);
@@ -71,7 +63,10 @@ export default function ResponseViewer({ response }: Props) {
 
         <View style={styles.metaItem}>
           <Icon name="weight" size={13} color={colors.textDim} />
-          <Text style={styles.meta}>{byteLength(response.data)} B</Text>
+          <Text style={styles.meta}>
+            {response.size ?? 0} B
+            {response.sizeSource === "measured" ? " (read)" : ""}
+          </Text>
         </View>
 
         <View style={{ flex: 1 }} />

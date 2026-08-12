@@ -10,6 +10,7 @@ import {
 import { colors } from "../theme/colors";
 import { radius, shadow } from "../theme/tokens";
 import Icon from "./Icon";
+import { runAssertions } from "../lib/assertions";
 
 interface TestCase {
   id: string;
@@ -49,56 +50,9 @@ export default function TestRunner({ tests, onChange, response }: Props) {
     onChange(tests.filter((t) => t.id !== id));
   };
 
-  const getNestedValue = (obj: any, path: string): any => {
-    // handles paths like "status", "data.user.email", "data.token"
-    const parts = path.split(".");
-    let current = obj;
-    for (const part of parts) {
-      if (current === undefined || current === null) return undefined;
-      current = current[part];
-    }
-    return current;
-  };
-
   const runTests = () => {
     if (!response) return;
-
-    const responseObj = {
-      status: response.status,
-      statusText: response.statusText,
-      timing: response.timing.total,
-      data: response.data,
-    };
-
-    const results = tests.map((test) => {
-      const actual = getNestedValue(responseObj, test.field);
-      let passed = false;
-
-      switch (test.operator) {
-        case "equals":
-          passed = String(actual) === test.value;
-          break;
-        case "not equals":
-          passed = String(actual) !== test.value;
-          break;
-        case "contains":
-          passed = String(actual).includes(test.value);
-          break;
-        case "exists":
-          passed = actual !== undefined && actual !== null;
-          break;
-        case "greater than":
-          passed = Number(actual) > Number(test.value);
-          break;
-        case "less than":
-          passed = Number(actual) < Number(test.value);
-          break;
-      }
-
-      return { ...test, passed };
-    });
-
-    onChange(results);
+    onChange(runAssertions(tests, response));
   };
 
   const passCount = tests.filter((t) => t.passed === true).length;
@@ -108,6 +62,7 @@ export default function TestRunner({ tests, onChange, response }: Props) {
     <View style={styles.container}>
       <View style={styles.topRow}>
         <Text style={styles.title}>Assertions</Text>
+        <Text style={styles.subtitle}>run automatically after each send</Text>
         {tests.length > 0 && tests[0].passed !== null && (
           <View style={styles.summary}>
             <Text style={[styles.summaryText, { color: colors.statusOk }]}>
@@ -185,7 +140,7 @@ export default function TestRunner({ tests, onChange, response }: Props) {
 
         {tests.length > 0 && response && (
           <TouchableOpacity style={styles.runBtn} onPress={runTests}>
-            <Text style={styles.runText}>Run Tests</Text>
+            <Text style={styles.runText}>Re-run</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -236,6 +191,12 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     fontWeight: "500",
+  },
+  subtitle: {
+    color: colors.textDim,
+    fontSize: 11,
+    marginLeft: 8,
+    flex: 1,
   },
   summary: {
     flexDirection: "row",

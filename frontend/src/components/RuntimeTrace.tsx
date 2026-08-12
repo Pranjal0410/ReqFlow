@@ -17,6 +17,14 @@ interface Props {
   url: string;
 }
 
+function safePath(url: string) {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url;
+  }
+}
+
 export default function RuntimeTrace({ response, method, url }: Props) {
   // hooks must run on every render, so the pulse is set up before the
   // early return below
@@ -51,24 +59,20 @@ export default function RuntimeTrace({ response, method, url }: Props) {
   // build trace steps from the response data
   const total = response.timing.total;
 
+  // both figures come from the backend, which times the wait for the first
+  // byte separately from reading the body. nothing here is a guess.
   const steps: TraceStep[] = [
     {
-      label: "HTTP Request",
-      detail: `${method} ${new URL(url).pathname}`,
-      time: total,
+      label: "Waiting (TTFB)",
+      detail: `${method} ${safePath(url)}`,
+      time: response.timing.ttfb ?? 0,
       accent: colors.traceRequest,
     },
     {
-      label: "Server Processing",
-      detail: "request handled",
-      time: Math.round(total * 0.7),
+      label: "Download",
+      detail: `${response.size ?? 0} B body`,
+      time: response.timing.download ?? 0,
       accent: colors.traceProcessing,
-    },
-    {
-      label: "Response",
-      detail: `${response.status} ${response.statusText}`,
-      time: Math.round(total * 0.1),
-      accent: colors.traceResponse,
     },
   ];
 
@@ -142,9 +146,20 @@ export default function RuntimeTrace({ response, method, url }: Props) {
             );
           })}
 
+          <View style={styles.detailRow}>
+            <View style={[styles.detailDot, { backgroundColor: colors.traceResponse }]} />
+            <Text style={styles.detailLabel}>Status</Text>
+            <View style={styles.barTrack} />
+            <Text style={styles.detailTime}>{response.status}</Text>
+            <Text style={styles.detailShare}>
+              {response.sizeSource === "content-length" ? "hdr" : "read"}
+            </Text>
+          </View>
+
           <Text style={styles.detailNote}>
-            Only the total round trip is measured. The processing and response
-            figures are derived from it, not timed on the server.
+            Measured on the ReqFlow backend. TTFB is the wait for the first byte,
+            download is the time spent reading the body. Time spent between your
+            browser and ReqFlow itself is not included.
           </Text>
         </View>
       )}

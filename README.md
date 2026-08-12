@@ -94,21 +94,6 @@ values that look like secrets go to sessionStorage on web and the OS keystore on
 a device, so a reload keeps you signed in but closing the browser does not leave
 a token on disk.
 
-## Known gaps
-
-Worth knowing before you rely on it.
-
-- The scan is a language model reading your code. It matched the source exactly
-  on the projects tried so far, but it is a reading, not a parse. It also means
-  the files it picks are sent to Google.
-- No frontend tests yet. The 26 are all backend.
-- Never run on a physical device. The code paths are there, the verification is
-  not.
-- The Pre-request Script tab is a placeholder. Nothing typed in it runs.
-- The agent can describe a request or an assertion but cannot put either into
-  your tabs for you.
-- Query parameters have no separate editor. Put them in the URL.
-
 ## Config
 
 | Variable | Default | What it does |

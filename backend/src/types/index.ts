@@ -20,5 +20,13 @@ export interface DetectedRoute {
     data: any;
     timing: {
       total: number;
+      // measured, not estimated. ttfb is the wait until the first byte of the
+      // response, download is the time spent reading the body after that.
+      ttfb: number;
+      download: number;
     };
+    // bytes. content-length when the server sent one, otherwise what we read
+    size: number;
+    sizeSource: "content-length" | "measured";
+    blocked?: boolean;
   }

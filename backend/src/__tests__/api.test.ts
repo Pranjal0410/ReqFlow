@@ -158,6 +158,48 @@ describe("POST /api/proxy", () => {
     expect(res.body.status).toBe(404);
   });
 
+  it("refuses a public target with 403", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: "https://example.com" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/local and private/i);
+  });
+
+  it("still allows loopback targets", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/thing` });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(200);
+  });
+
+  it("reports measured ttfb and download separately", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/thing` });
+
+    const t = res.body.timing;
+    expect(t.ttfb).toBeGreaterThanOrEqual(0);
+    expect(t.download).toBeGreaterThanOrEqual(0);
+    // the parts add up to the whole rather than being a fixed ratio of it
+    expect(t.ttfb + t.download).toBe(t.total);
+  });
+
+  it("reports response size and where the number came from", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/thing` });
+
+    expect(res.body.size).toBeGreaterThan(0);
+    expect(["content-length", "measured"]).toContain(res.body.sizeSource);
+    expect(res.body.size).toBe(
+      Buffer.byteLength(JSON.stringify({ name: "widget", id: 7 }))
+    );
+  });
+
   it("handles an unreachable server without crashing", async () => {
     const res = await request(app)
       .post("/api/proxy")

@@ -1,0 +1,223 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
+import request from "supertest";
+import express from "express";
+import cors from "cors";
+import type { Server } from "http";
+
+// the analyze route calls Gemini. mocking it keeps the suite deterministic,
+// free and offline. the real prompt is not what these tests are checking.
+jest.mock("../services/gemini", () => ({
+  analyzeCode: jest.fn(async () => [
+    {
+      method: "GET",
+      path: "/users",
+      description: "lists users",
+      params: [],
+      body: null,
+    },
+    {
+      method: "POST",
+      path: "/users",
+      description: "creates a user",
+      params: [],
+      body: { name: "string" },
+    },
+  ]),
+}));
+
+import proxyRouter from "../routes/proxy";
+import analyzeRouter from "../routes/analyze";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+app.use("/api/analyze", analyzeRouter);
+app.use("/api/proxy", proxyRouter);
+app.get("/health", (req, res) => {
+  res.json({ status: "running", timestamp: new Date().toISOString() });
+});
+
+// a throwaway upstream so the forwarding tests do not depend on the internet
+let upstream: Server;
+let upstreamUrl: string;
+let closedPort: number;
+
+beforeAll(async () => {
+  const target = express();
+  target.use(express.json());
+  target.get("/thing", (req, res) => res.json({ name: "widget", id: 7 }));
+  target.post("/echo", (req, res) => res.status(201).json({ received: req.body }));
+
+  await new Promise<void>((resolve) => {
+    upstream = target.listen(0, () => resolve());
+  });
+  const addr = upstream.address();
+  const port = typeof addr === "object" && addr ? addr.port : 0;
+  upstreamUrl = `http://127.0.0.1:${port}`;
+
+  // grab a port then release it, so nothing is listening on it
+  const spare = express().listen(0);
+  const spareAddr = spare.address();
+  closedPort = typeof spareAddr === "object" && spareAddr ? spareAddr.port : 65000;
+  await new Promise<void>((resolve) => spare.close(() => resolve()));
+});
+
+afterAll(async () => {
+  if (upstream) await new Promise<void>((resolve) => upstream.close(() => resolve()));
+});
+
+// ---------------------------------------------------------------- fixtures
+
+function makeProject(files: Record<string, string>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-test-"));
+  for (const [rel, contents] of Object.entries(files)) {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, contents);
+  }
+  return dir;
+}
+
+const tempDirs: string[] = [];
+afterAll(() => {
+  tempDirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
+});
+
+function project(files: Record<string, string>) {
+  const dir = makeProject(files);
+  tempDirs.push(dir);
+  return dir;
+}
+
+// ------------------------------------------------------------------ health
+
+describe("GET /health", () => {
+  it("returns running status", async () => {
+    const res = await request(app).get("/health");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("running");
+    expect(res.body.timestamp).toEqual(expect.any(String));
+  });
+});
+
+// ------------------------------------------------------------------- proxy
+
+describe("POST /api/proxy", () => {
+  it("returns 400 when method is missing", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ url: "http://example.com" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+
+  it("returns 400 when url is missing", async () => {
+    const res = await request(app).post("/api/proxy").send({ method: "GET" });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/required/i);
+  });
+
+  it("forwards a GET request and reports timing", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/thing` });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(200);
+    expect(res.body.data).toEqual({ name: "widget", id: 7 });
+    expect(res.body.timing.total).toBeGreaterThanOrEqual(0);
+    expect(typeof res.body.timing.total).toBe("number");
+  });
+
+  it("forwards a POST request with a body", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({
+        method: "POST",
+        url: `${upstreamUrl}/echo`,
+        headers: { "Content-Type": "application/json" },
+        body: { title: "outage", severity: "critical" },
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(201);
+    expect(res.body.data.received).toEqual({
+      title: "outage",
+      severity: "critical",
+    });
+  });
+
+  it("passes 4xx from upstream through instead of throwing", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/missing` });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(404);
+  });
+
+  it("handles an unreachable server without crashing", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `http://127.0.0.1:${closedPort}/nope` });
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe(0);
+    expect(res.body.data).toHaveProperty("error");
+    expect(res.body.timing.total).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ----------------------------------------------------------------- analyze
+
+describe("POST /api/analyze", () => {
+  it("returns 400 when projectPath is missing", async () => {
+    const res = await request(app).post("/api/analyze").send({});
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/projectPath/i);
+  });
+
+  it("returns detected routes for a project that has them", async () => {
+    const dir = project({
+      "server.js": `
+        const express = require("express");
+        const app = express();
+        app.get("/users", (req, res) => res.json([]));
+        app.post("/users", (req, res) => res.status(201).json({}));
+        module.exports = app;
+      `,
+    });
+
+    const res = await request(app).post("/api/analyze").send({ projectPath: dir });
+
+    expect(res.status).toBe(200);
+    expect(res.body.filesScanned).toBe(1);
+    expect(res.body.routes).toHaveLength(2);
+    expect(res.body.routes[0]).toMatchObject({ method: "GET", path: "/users" });
+  });
+
+  it("returns 404 when the folder has no route files", async () => {
+    // a purpose built folder, not /tmp, which on a dev machine is full of
+    // other people's javascript and would make this pass or fail at random
+    const dir = project({
+      "readme.md": "no code here",
+      "notes.txt": "app.get is mentioned but this is not javascript",
+    });
+
+    const res = await request(app).post("/api/analyze").send({ projectPath: dir });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toMatch(/no route files/i);
+  });
+
+  it("returns 500 with a readable message when the path does not exist", async () => {
+    const res = await request(app)
+      .post("/api/analyze")
+      .send({ projectPath: "/definitely/not/a/real/path" });
+
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/path not found/i);
+  });
+});

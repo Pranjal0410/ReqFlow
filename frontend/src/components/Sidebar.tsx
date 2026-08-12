@@ -21,6 +21,7 @@ interface Props {
   onBaseUrlChange: (url: string) => void;
   history: HistoryEntry[];
   onSelectHistory: (entry: HistoryEntry) => void;
+  onReset: () => void;
 }
 
 export default function Sidebar({
@@ -32,8 +33,10 @@ export default function Sidebar({
   onBaseUrlChange,
   history,
   onSelectHistory,
+  onReset,
 }: Props) {
   const [hovered, setHovered] = React.useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [activePath, setActivePath] = React.useState<string | null>(null);
 
@@ -54,7 +57,26 @@ export default function Sidebar({
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>API Explorer</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title}>API Explorer</Text>
+          <Pressable
+            style={({ hovered: h }: any) => [styles.reset, h && styles.resetHover]}
+            onPress={() => {
+              if (confirmReset) {
+                setConfirmReset(false);
+                onReset();
+              } else {
+                setConfirmReset(true);
+                // reverts on its own so the armed state is never a surprise later
+                setTimeout(() => setConfirmReset(false), 4000);
+              }
+            }}
+          >
+            <Text style={[styles.resetText, confirmReset && styles.resetTextArmed]}>
+              {confirmReset ? "Sure? Click again" : "Reset"}
+            </Text>
+          </Pressable>
+        </View>
         <Pressable
           style={({ pressed }: any) => [
             styles.scanBtn,
@@ -216,11 +238,33 @@ const styles = StyleSheet.create({
   header: {
     marginBottom: 12,
   },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 10,
+  },
   title: {
     color: colors.text,
     fontSize: 16,
     fontWeight: "500",
-    marginBottom: 10,
+  },
+  reset: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  resetHover: {
+    backgroundColor: colors.hover,
+  },
+  resetText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  resetTextArmed: {
+    color: colors.statusErr,
   },
   scanBtn: {
     backgroundColor: colors.accent,

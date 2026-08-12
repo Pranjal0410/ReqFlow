@@ -14,7 +14,7 @@ import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
-import { loadWorkspace, saveWorkspace } from "./src/lib/persist";
+import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
 
 function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
@@ -167,6 +167,18 @@ export default function App() {
     setActiveTabId(tab.id);
   };
 
+  const handleReset = async () => {
+    await clearWorkspace();
+    const fresh = createTab(CONFIG.DEFAULT_TARGET);
+    setRoutes([]);
+    setTabs([fresh]);
+    setActiveTabId(fresh.id);
+    setHistory([]);
+    setProjectName("ReqFlow");
+    setBaseUrl(CONFIG.DEFAULT_TARGET);
+    setError(null);
+  };
+
   const handleNewTab = () => {
     const newTab = createTab(baseUrl);
     setTabs((prev) => [...prev, newTab]);
@@ -247,6 +259,7 @@ export default function App() {
           onBaseUrlChange={setBaseUrl}
           history={history}
           onSelectHistory={handleReplayHistory}
+          onReset={handleReset}
         />
 
         <View style={styles.center}>

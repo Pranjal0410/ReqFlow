@@ -95,7 +95,7 @@ async function runTool(call: FunctionCall, allowWrites: boolean) {
 }
 
 router.post("/", async (req: Request, res: Response) => {
-  const { message, routeContext, history, allowWrites } = req.body;
+  const { message, routeContext, history, allowWrites, baseUrl } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: "message is required" });
@@ -118,6 +118,10 @@ When endpoints need auth, call the login endpoint first, read the token out of t
 ${writesEnabled
   ? "Write requests are enabled. Still avoid destructive calls like DELETE unless the user asked for them explicitly."
   : "Read-only mode is on: only GET requests and login work. If a test needs a write, say so instead of retrying."}
+
+${baseUrl
+  ? `The API under test is at ${baseUrl}. Every scanned route below is relative to that origin, so build urls as ${baseUrl} followed by the path. Never guess a different host or port. If a route returns html instead of json, say the origin looks wrong rather than concluding the project is misconfigured.`
+  : "No base url was supplied. Ask which host and port to use rather than guessing one."}
 
 You have context about the user's project:
 ${routeContext || "No project scanned yet."}

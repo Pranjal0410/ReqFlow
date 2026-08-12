@@ -34,9 +34,10 @@ interface Props {
   onSelectRoute?: (route: DetectedRoute) => void;
   visible: boolean;
   onClose: () => void;
+  baseUrl: string;
 }
 
-export default function AiAgent({ routes, visible, onClose }: Props) {
+export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
@@ -79,6 +80,7 @@ export default function AiAgent({ routes, visible, onClose }: Props) {
         body: JSON.stringify({
           message: userMsg.content,
           routeContext,
+          baseUrl,
           allowWrites,
           history: messages.slice(-6).map((m) => ({
             role: m.role,

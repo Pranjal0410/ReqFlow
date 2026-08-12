@@ -8,8 +8,9 @@ import RequestBuilder from "./src/components/RequestBuilder";
 import RuntimeTrace from "./src/components/RuntimeTrace";
 import ScanModal from "./src/components/ScanModal";
 import Toast from "./src/components/Toast";
+import AppStatusBar from "./src/components/StatusBar";
 import { analyzeProject, sendRequest, checkTarget } from "./src/services/api";
-import { DetectedRoute, RequestTab } from "./src/types";
+import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 
@@ -38,6 +39,7 @@ export default function App() {
   const [showAiAgent, setShowAiAgent] = useState(true);
   const [projectName, setProjectName] = useState("ReqFlow");
   const [error, setError] = useState<string | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -114,6 +116,15 @@ export default function App() {
     }
   };
 
+  const handleReplayHistory = (entry: HistoryEntry) => {
+    const tab = createTab(baseUrl);
+    tab.method = entry.method;
+    tab.url = entry.url;
+    tab.label = `${entry.method} ${entry.url.replace(/^https?:\/\/[^/]+/, "")}`;
+    setTabs((prev) => [...prev, tab]);
+    setActiveTabId(tab.id);
+  };
+
   const handleNewTab = () => {
     const newTab = createTab(baseUrl);
     setTabs((prev) => [...prev, newTab]);
@@ -139,6 +150,20 @@ export default function App() {
 
       const res = await sendRequest(activeTab.method, activeTab.url, headerObj, parsedBody);
       updateActiveTab({ response: res, loading: false });
+
+      setHistory((prev) =>
+        [
+          {
+            id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
+            method: activeTab.method,
+            url: activeTab.url,
+            status: res.status,
+            timing: res.timing.total,
+            at: Date.now(),
+          },
+          ...prev,
+        ].slice(0, 10)
+      );
     } catch (err: any) {
       const detail =
         err instanceof SyntaxError
@@ -166,6 +191,8 @@ export default function App() {
           scanning={scanning}
           baseUrl={baseUrl}
           onBaseUrlChange={setBaseUrl}
+          history={history}
+          onSelectHistory={handleReplayHistory}
         />
 
         <View style={styles.center}>
@@ -205,11 +232,19 @@ export default function App() {
           onSelectRoute={handleSelectRoute}
           visible={showAiAgent}
           onClose={() => setShowAiAgent(false)}
+          baseUrl={baseUrl}
         />
       </View>
 
       {/* the scan modal renders above the toast layer, so scan errors
           are shown inside it instead */}
+      <AppStatusBar
+        workspace={`${projectName} workspace`}
+        target={target}
+        targetUp={targetUp}
+        requestCount={history.length}
+      />
+
       <Toast message={showScan ? null : error} onDismiss={() => setError(null)} />
 
       <ScanModal

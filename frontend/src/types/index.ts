@@ -60,7 +60,6 @@ export type SubTab =
   | "headers"
   | "body"
   | "auth"
-  | "prerequest"
   | "tests";
 
 export interface HistoryEntry {

@@ -13,9 +13,19 @@ interface HeaderRow {
 interface Props {
   headers: HeaderRow[];
   onChange: (headers: HeaderRow[]) => void;
+  // the query parameter editor is the same rows with different words on them
+  keyPlaceholder?: string;
+  addLabel?: string;
+  emptyHint?: string;
 }
 
-export default function HeadersEditor({ headers, onChange }: Props) {
+export default function HeadersEditor({
+  headers,
+  onChange,
+  keyPlaceholder = "header name",
+  addLabel,
+  emptyHint,
+}: Props) {
   const updateRow = (index: number, field: "key" | "value", val: string) => {
     const updated = [...headers];
     updated[index] = { ...updated[index], [field]: val };
@@ -61,7 +71,7 @@ export default function HeadersEditor({ headers, onChange }: Props) {
               style={[styles.input, !row.enabled && styles.disabled]}
               value={row.key}
               onChangeText={(v) => updateRow(i, "key", v)}
-              placeholder="header name"
+              placeholder={keyPlaceholder}
               placeholderTextColor={colors.textDim}
               autoCapitalize="none"
             />
@@ -85,11 +95,13 @@ export default function HeadersEditor({ headers, onChange }: Props) {
         ))}
       </ScrollView>
 
+      {headers.length === 0 && emptyHint && <Text style={styles.emptyHint}>{emptyHint}</Text>}
+
       <Pressable
         style={({ hovered }: any) => [styles.addBtn, hovered && styles.addBtnHover]}
         onPress={addRow}
       >
-        <Text style={styles.addText}>+ Add Header</Text>
+        <Text style={styles.addText}>{addLabel || "+ Add Header"}</Text>
       </Pressable>
     </View>
   );
@@ -167,5 +179,10 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 12,
     fontWeight: "500",
+  },
+  emptyHint: {
+    color: colors.textDim,
+    fontSize: 11,
+    paddingVertical: 4,
   },
 });

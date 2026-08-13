@@ -19,6 +19,7 @@ import HeadersEditor from "./HeadersEditor";
 import TestRunner from "./TestRunner";
 import ResponseViewer from "./ResponseViewer";
 import { SubTab, TestCase } from "../types";
+import { paramsFromUrl, urlWithParams } from "../lib/queryParams";
 
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
@@ -42,6 +43,7 @@ interface Props {
   onSend: () => void;
   loading: boolean;
   response: any;
+  timingNote?: { text: string; slower: boolean } | null;
 }
 
 export default function RequestBuilder({
@@ -58,12 +60,26 @@ export default function RequestBuilder({
   onSend,
   loading,
   response,
+  timingNote,
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
   const [curlCopied, setCurlCopied] = React.useState(false);
   const [formatError, setFormatError] = React.useState<string | null>(null);
-  const [preScript, setPreScript] = React.useState("");
+
+  // a static Send button during a slow request looks frozen. this counts up
+  // from the moment of the press, so the wait is visibly a wait.
+  const [elapsed, setElapsed] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!loading) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setElapsed(Date.now() - start), 100);
+    return () => clearInterval(id);
+  }, [loading]);
 
   // ctrl+enter / cmd+enter sends. web only, a phone has no such shortcut.
   React.useEffect(() => {
@@ -162,7 +178,10 @@ export default function RequestBuilder({
             style={styles.sendBtn}
           >
             {loading ? (
-              <ActivityIndicator size="small" color={colors.bg} />
+              <View style={styles.sendingRow}>
+                <ActivityIndicator size="small" color={colors.bg} />
+                <Text style={styles.sendBtnText}>{(elapsed / 1000).toFixed(1)}s</Text>
+              </View>
             ) : (
               <Text style={styles.sendBtnText}>Send</Text>
             )}
@@ -272,40 +291,22 @@ export default function RequestBuilder({
         )}
 
         {activeSubTab === "params" && (
-          <View style={styles.authSection}>
-            <Text style={styles.authLabel}>
-              There is no separate editor for query parameters yet. Put them in
-              the URL and they are sent as typed.
-            </Text>
-          </View>
+          <HeadersEditor
+            headers={paramsFromUrl(url)}
+            onChange={(rows) => onUrlChange(urlWithParams(url, rows))}
+            keyPlaceholder="param name"
+            addLabel="+ Add Param"
+            emptyHint="No query parameters. Adding one here writes it into the URL."
+          />
         )}
 
-        {activeSubTab === "prerequest" && (
-          <View style={styles.bodySection}>
-            <Text style={styles.authLabel}>
-              Runs before the request is sent. Not wired up yet, nothing here is
-              executed.
-            </Text>
-            <TextInput
-              style={[styles.bodyInput, styles.scriptInput]}
-              multiline
-              value={preScript}
-              onChangeText={setPreScript}
-              placeholder={"// set a header from a previous response\n// req.headers['Authorization'] = 'Bearer ' + token"}
-              placeholderTextColor={colors.textDim}
-              autoCapitalize="none"
-              autoCorrect={false}
-              textAlignVertical="top"
-            />
-          </View>
-        )}
 
         {activeSubTab === "tests" && (
           <TestRunner tests={tests} onChange={onTestsChange} response={response} />
         )}
       </View>
 
-      <ResponseViewer response={response} />
+      <ResponseViewer response={response} loading={loading} timingNote={timingNote} />
     </View>
   );
 }
@@ -399,10 +400,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: "monospace",
   },
-  scriptInput: {
-    color: colors.textMuted,
-    minHeight: 140,
-  },
   sendBtnWrap: {
     borderRadius: radius.md,
     ...shadow.sm,
@@ -413,6 +410,14 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderRadius: radius.md,
     alignItems: "center",
+    justifyContent: "center",
+    // wide enough for the timer, so the row does not shift when it appears
+    minWidth: 108,
+  },
+  sendingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
   },
   sendBtnPressed: {
     opacity: 0.82,

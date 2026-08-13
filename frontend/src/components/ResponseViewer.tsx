@@ -1,5 +1,12 @@
 import React from "react";
-import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  ActivityIndicator,
+} from "react-native";
 import * as Clipboard from "expo-clipboard";
 import { colors } from "../theme/colors";
 import { radius, shadow, glow, transition } from "../theme/tokens";
@@ -8,14 +15,38 @@ import JsonView from "./JsonView";
 
 interface Props {
   response: any;
+  loading?: boolean;
+  // how this run compares with earlier runs of the same endpoint, or null when
+  // there is not enough history to say anything
+  timingNote?: { text: string; slower: boolean } | null;
 }
 
-export default function ResponseViewer({ response }: Props) {
+export default function ResponseViewer({ response, loading, timingNote }: Props) {
   const [raw, setRaw] = React.useState(false);
   const [showHeaders, setShowHeaders] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
+  const bodyRef = React.useRef<ScrollView>(null);
 
-  if (!response) return null;
+  // a re-sent request reuses this view, and the old scroll offset survives, so
+  // a fresh response would open somewhere in its middle
+  React.useEffect(() => {
+    bodyRef.current?.scrollTo({ y: 0, animated: false });
+  }, [response]);
+
+  // the previous response is cleared the moment Send is pressed, so without
+  // this the panel would blink out of existence for the length of the request
+  if (!response) {
+    if (!loading) return null;
+    return (
+      <View style={styles.section}>
+        <View style={styles.divider} />
+        <View style={styles.waiting}>
+          <ActivityIndicator size="small" color={colors.accent} />
+          <Text style={styles.waitingText}>waiting for a response</Text>
+        </View>
+      </View>
+    );
+  }
 
   const ok = response.status < 400;
   const headerEntries = Object.entries(response.headers || {});
@@ -59,6 +90,11 @@ export default function ResponseViewer({ response }: Props) {
         <View style={styles.metaItem}>
           <Icon name="clock" size={13} color={colors.textDim} />
           <Text style={styles.meta}>{response.timing.total} ms</Text>
+          {timingNote && (
+            <Text style={[styles.timingNote, timingNote.slower && styles.timingNoteSlow]}>
+              {timingNote.text}
+            </Text>
+          )}
         </View>
 
         <View style={styles.metaItem}>
@@ -133,7 +169,7 @@ export default function ResponseViewer({ response }: Props) {
         </ScrollView>
       )}
 
-      <ScrollView style={styles.body} nestedScrollEnabled>
+      <ScrollView ref={bodyRef} style={styles.body} nestedScrollEnabled>
         <JsonView data={response.data} raw={raw} />
       </ScrollView>
     </View>
@@ -157,6 +193,16 @@ const styles = StyleSheet.create({
     gap: 14,
     marginBottom: 8,
   },
+  waiting: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    paddingVertical: 6,
+  },
+  waitingText: {
+    color: colors.textDim,
+    fontSize: 12,
+  },
   statusBadge: {
     paddingHorizontal: 14,
     paddingVertical: 7,
@@ -170,6 +216,15 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 5,
+  },
+  timingNote: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+  },
+  timingNoteSlow: {
+    color: colors.statusErr,
+    fontWeight: "500",
   },
   meta: {
     color: colors.textDim,

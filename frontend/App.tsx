@@ -119,6 +119,13 @@ export default function App() {
     activeTabIdRef.current = activeTabId;
   }, [activeTabId]);
 
+  // same trick for the tabs themselves, so a handler can build the next list
+  // and read back which tab to select without going through an updater
+  const tabsRef = React.useRef(tabs);
+  React.useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
   // what the agent is told the user is looking at. the response body is capped
   // because a chatty endpoint would otherwise fill the model's context with a
   // payload nobody asked about.
@@ -382,43 +389,44 @@ export default function App() {
     setTimings((prev) =>
       sent.reduce((acc, s) => recordTiming(acc, s.method, s.url, s.response), prev)
     );
+    // built here rather than inside a setTabs updater: React is free to defer
+    // an updater until render, and the id to select was being read on the next
+    // line. it happened to work, but only while nothing else was queued.
     let focusId = activeTabIdRef.current;
+    const next = [...tabsRef.current];
 
-    setTabs((prev) => {
-      const next = [...prev];
-
-      for (const s of sent) {
-        const headers = Object.entries(s.headers || {}).map(([key, value]) => ({
-          key,
-          value: String(value),
-          enabled: true,
-        }));
-        // the agent leaves this to the http client, but a tab is re-sent by
-        // hand, so spell it out or the resend goes without a content type
-        if (s.body && !headers.some((h) => h.key.toLowerCase() === "content-type")) {
-          headers.unshift({ key: "Content-Type", value: "application/json", enabled: true });
-        }
-        // testing the same endpoint again should refresh its tab, not stack one
-        const at = next.findIndex((t) => t.method === s.method && t.url === s.url);
-
-        if (at >= 0) {
-          next[at] = { ...next[at], headers, body: s.body, response: s.response, loading: false };
-          focusId = next[at].id;
-        } else {
-          const tab = createTab(baseUrl);
-          tab.method = s.method;
-          tab.url = s.url;
-          tab.body = s.body;
-          tab.headers = headers;
-          tab.response = s.response;
-          tab.label = `${s.method} ${s.url.replace(/^https?:\/\/[^/]+/, "")}`;
-          next.push(tab);
-          focusId = tab.id;
-        }
+    for (const s of sent) {
+      const headers = Object.entries(s.headers || {}).map(([key, value]) => ({
+        key,
+        value: String(value),
+        enabled: true,
+      }));
+      // the agent leaves this to the http client, but a tab is re-sent by
+      // hand, so spell it out or the resend goes without a content type
+      if (s.body && !headers.some((h) => h.key.toLowerCase() === "content-type")) {
+        headers.unshift({ key: "Content-Type", value: "application/json", enabled: true });
       }
+      // testing the same endpoint again should refresh its tab, not stack one
+      const at = next.findIndex((t) => t.method === s.method && t.url === s.url);
 
-      return next;
-    });
+      if (at >= 0) {
+        next[at] = { ...next[at], headers, body: s.body, response: s.response, loading: false };
+        focusId = next[at].id;
+      } else {
+        const tab = createTab(baseUrl);
+        tab.method = s.method;
+        tab.url = s.url;
+        tab.body = s.body;
+        tab.headers = headers;
+        tab.response = s.response;
+        tab.label = `${s.method} ${s.url.replace(/^https?:\/\/[^/]+/, "")}`;
+        next.push(tab);
+        focusId = tab.id;
+      }
+    }
+
+    setTabs(next);
+    tabsRef.current = next;
 
     // the last request is the one the user asked about, so land them on it
     setActiveTabId(focusId);

@@ -2,19 +2,37 @@ import React, { useState } from "react";
 import { View, StyleSheet, StatusBar, Platform } from "react-native";
 import Sidebar from "./src/components/Sidebar";
 import TopBar from "./src/components/TopBar";
-import AiAgent from "./src/components/AiAgent";
+import AiAgent, {
+  AgentRequestDraft,
+  AgentAssertion,
+  AgentSentRequest,
+} from "./src/components/AiAgent";
 import TabBar from "./src/components/TabBar";
 import RequestBuilder from "./src/components/RequestBuilder";
 import RuntimeTrace from "./src/components/RuntimeTrace";
-import ScanModal from "./src/components/ScanModal";
+import ScanModal, { ScanStage } from "./src/components/ScanModal";
 import Toast from "./src/components/Toast";
 import AppStatusBar from "./src/components/StatusBar";
-import { analyzeProject, sendRequest, checkTarget } from "./src/services/api";
+import {
+  analyzeProject,
+  countProjectFiles,
+  sendRequest,
+  checkTarget,
+  exportOpenApi,
+} from "./src/services/api";
 import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
 import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
+import { Variable, toMap, substitute } from "./src/lib/variables";
+import {
+  TimingHistory,
+  record as recordTiming,
+  compare as compareTimings,
+  summarise as summariseTiming,
+  endpointKey,
+} from "./src/lib/timings";
 
 function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
@@ -37,11 +55,16 @@ export default function App() {
   const [tabs, setTabs] = useState<RequestTab[]>([createTab(CONFIG.DEFAULT_TARGET)]);
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
   const [scanning, setScanning] = useState(false);
+  const [scanStage, setScanStage] = useState<ScanStage>(null);
+  const [scanFilesFound, setScanFilesFound] = useState<number | null>(null);
   const [showScan, setShowScan] = useState(false);
   const [showAiAgent, setShowAiAgent] = useState(true);
   const [projectName, setProjectName] = useState("ReqFlow");
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [variables, setVariables] = useState<Variable[]>([]);
+  // per endpoint timing samples, so a response can be read against its own past
+  const [timings, setTimings] = useState<TimingHistory>({});
 
   // nothing is written back until the saved workspace has been read, otherwise
   // the empty first render would immediately overwrite it
@@ -58,6 +81,8 @@ export default function App() {
         setTabs(saved.tabs);
         setActiveTabId(saved.activeTabId);
         setHistory(saved.history);
+        setVariables(saved.variables || []);
+        setTimings(saved.timings || {});
       }
       if (!cancelled) setHydrated(true);
     })();
@@ -78,12 +103,66 @@ export default function App() {
         tabs,
         activeTabId,
         history,
+        variables,
+        timings,
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history]);
+  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
+
+  // mirrors activeTabId so the agent handlers can read it without waiting for a
+  // re-render
+  const activeTabIdRef = React.useRef(activeTabId);
+  React.useEffect(() => {
+    activeTabIdRef.current = activeTabId;
+  }, [activeTabId]);
+
+  // what the agent is told the user is looking at. the response body is capped
+  // because a chatty endpoint would otherwise fill the model's context with a
+  // payload nobody asked about.
+  const activeTabContext = React.useMemo(
+    () => ({
+      method: activeTab.method,
+      url: activeTab.url,
+      headers: Object.fromEntries(
+        activeTab.headers.filter((h) => h.enabled && h.key.trim()).map((h) => [h.key, h.value])
+      ),
+      body: activeTab.body,
+      response: activeTab.response
+        ? {
+            status: activeTab.response.status,
+            statusText: activeTab.response.statusText,
+            timing: activeTab.response.timing.total,
+            data: JSON.stringify(activeTab.response.data).slice(0, 4000),
+          }
+        : null,
+      tests: activeTab.tests.map((t) => ({
+        field: t.field,
+        operator: t.operator,
+        value: t.value,
+        passed: t.passed,
+      })),
+    }),
+    [activeTab]
+  );
+
+  // the active response measured against earlier runs of the same endpoint.
+  // the current run is already in the history, so it is excluded here or it
+  // would be comparing itself against itself.
+  const timingReport = React.useMemo(() => {
+    if (!activeTab.response) return { comparisons: [], summary: null };
+
+    const key = endpointKey(activeTab.method, activeTab.url);
+    const samples = timings[key] || [];
+    const prior: TimingHistory = { ...timings, [key]: samples.slice(0, -1) };
+
+    return {
+      comparisons: compareTimings(prior, activeTab.method, activeTab.url, activeTab.response),
+      summary: summariseTiming(prior, activeTab.method, activeTab.url, activeTab.response),
+    };
+  }, [activeTab.response, activeTab.method, activeTab.url, timings]);
 
   // the server the active request points at, if the url parses
   const target = React.useMemo(() => {
@@ -130,7 +209,17 @@ export default function App() {
 
   const handleScan = async (projectPath: string) => {
     setScanning(true);
+    setScanStage("reading");
+    setScanFilesFound(null);
     try {
+      try {
+        setScanFilesFound(await countProjectFiles(projectPath));
+      } catch {
+        // only feeds the progress display. a path that does not exist still
+        // fails properly on the scan below, with the backend's own message.
+      }
+      setScanStage("analyzing");
+
       const result = await analyzeProject(projectPath);
       setRoutes(result.routes);
       setProjectName(projectPath.split("/").pop() || "Project");
@@ -140,6 +229,7 @@ export default function App() {
       setError(`Scan failed: ${detail}`);
     } finally {
       setScanning(false);
+      setScanStage(null);
     }
   };
 
@@ -158,6 +248,71 @@ export default function App() {
     }
   };
 
+  // sends every tab that has a url and reports how the assertions did. a single
+  // agent run already exercises a whole flow, this is how you repeat it later
+  // without asking the agent again.
+  const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
+  const [runSummary, setRunSummary] = useState<{ passed: number; failed: number; errors: number } | null>(null);
+
+  const handleRunAll = async () => {
+    const runnable = tabs.filter((t) => t.url.trim());
+    if (runnable.length === 0 || runProgress) return;
+
+    const vars = toMap(variables);
+    setRunSummary(null);
+    setRunProgress({ done: 0, total: runnable.length });
+
+    let passed = 0;
+    let failed = 0;
+    let errors = 0;
+
+    // one at a time, so a dev server is not hit with the whole workspace at once
+    for (let i = 0; i < runnable.length; i++) {
+      const tab = runnable[i];
+      try {
+        let parsedBody = undefined;
+        if (["POST", "PUT", "PATCH"].includes(tab.method) && tab.body.trim()) {
+          parsedBody = JSON.parse(substitute(tab.body, vars));
+        }
+
+        const headerObj: Record<string, string> = {};
+        tab.headers
+          .filter((h) => h.enabled && h.key.trim())
+          .forEach((h) => {
+            headerObj[h.key] = substitute(h.value, vars);
+          });
+
+        const res = await sendRequest(
+          tab.method,
+          substitute(tab.url, vars),
+          headerObj,
+          parsedBody
+        );
+        setTimings((prev) => recordTiming(prev, tab.method, tab.url, res));
+      const tested = runAssertions(tab.tests, res);
+        tested.forEach((t) => (t.passed ? passed++ : failed++));
+
+        setTabs((prev) =>
+          prev.map((t) => (t.id === tab.id ? { ...t, response: res, tests: tested, loading: false } : t))
+        );
+      } catch {
+        // a tab with an unparseable body or an unreachable host should not stop
+        // the rest of the run
+        errors++;
+      }
+      setRunProgress({ done: i + 1, total: runnable.length });
+    }
+
+    setRunProgress(null);
+    setRunSummary({ passed, failed, errors });
+  };
+
+  // an agent run leaves a tab per request, and they persist. this is the way
+  // back to a clean row without also throwing away the scan, which Reset does.
+  const handleCloseOthers = () => {
+    setTabs((prev) => prev.filter((t) => t.id === activeTabId));
+  };
+
   const handleReplayHistory = (entry: HistoryEntry) => {
     const tab = createTab(baseUrl);
     tab.method = entry.method;
@@ -174,6 +329,8 @@ export default function App() {
     setTabs([fresh]);
     setActiveTabId(fresh.id);
     setHistory([]);
+    setVariables([]);
+    setTimings({});
     setProjectName("ReqFlow");
     setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
@@ -185,24 +342,157 @@ export default function App() {
     setActiveTabId(newTab.id);
   };
 
+  // the agent drafts a request, it does not send it. the tab opens filled in
+  // and waits for the user to press Send like any other.
+  const handleAgentCreateRequest = (draft: AgentRequestDraft) => {
+    const newTab = createTab(baseUrl);
+    const drafted = Object.entries(draft.headers || {}).map(([key, value]) => ({
+      key,
+      value: String(value),
+      enabled: true,
+    }));
+
+    // keep the default Content-Type unless the agent set its own
+    const hasContentType = drafted.some((h) => h.key.toLowerCase() === "content-type");
+
+    setTabs((prev) => [
+      ...prev,
+      {
+        ...newTab,
+        method: draft.method,
+        url: draft.url,
+        body: draft.body,
+        headers: hasContentType
+          ? drafted
+          : [...newTab.headers.filter((h) => h.key === "Content-Type"), ...drafted],
+        label: draft.label,
+      },
+    ]);
+    setActiveTabId(newTab.id);
+    activeTabIdRef.current = newTab.id;
+  };
+
+  // whatever the agent sent lands in the workspace on its own, with the real
+  // response already attached. re-running the request here instead would show
+  // the same thing twice and, for a write, would do it twice.
+  const handleAgentRequests = (sent: AgentSentRequest[]) => {
+    if (sent.length === 0) return;
+
+    // the agent's requests are real sends too, so they belong in the baseline
+    setTimings((prev) =>
+      sent.reduce((acc, s) => recordTiming(acc, s.method, s.url, s.response), prev)
+    );
+    let focusId = activeTabIdRef.current;
+
+    setTabs((prev) => {
+      const next = [...prev];
+
+      for (const s of sent) {
+        const headers = Object.entries(s.headers || {}).map(([key, value]) => ({
+          key,
+          value: String(value),
+          enabled: true,
+        }));
+        // the agent leaves this to the http client, but a tab is re-sent by
+        // hand, so spell it out or the resend goes without a content type
+        if (s.body && !headers.some((h) => h.key.toLowerCase() === "content-type")) {
+          headers.unshift({ key: "Content-Type", value: "application/json", enabled: true });
+        }
+        // testing the same endpoint again should refresh its tab, not stack one
+        const at = next.findIndex((t) => t.method === s.method && t.url === s.url);
+
+        if (at >= 0) {
+          next[at] = { ...next[at], headers, body: s.body, response: s.response, loading: false };
+          focusId = next[at].id;
+        } else {
+          const tab = createTab(baseUrl);
+          tab.method = s.method;
+          tab.url = s.url;
+          tab.body = s.body;
+          tab.headers = headers;
+          tab.response = s.response;
+          tab.label = `${s.method} ${s.url.replace(/^https?:\/\/[^/]+/, "")}`;
+          next.push(tab);
+          focusId = tab.id;
+        }
+      }
+
+      return next;
+    });
+
+    // the last request is the one the user asked about, so land them on it
+    setActiveTabId(focusId);
+    activeTabIdRef.current = focusId;
+  };
+
+  // the agent saves a token here after a login, so every tab can use {{token}}
+  // instead of each one carrying its own copy
+  const handleAgentSetVariable = (name: string, value: string) => {
+    setVariables((prev) => {
+      const at = prev.findIndex((v) => v.key === name);
+      if (at >= 0) {
+        const next = [...prev];
+        next[at] = { key: name, value };
+        return next;
+      }
+      return [...prev, { key: name, value }];
+    });
+  };
+
+  const handleAgentCreateAssertions = (assertions: AgentAssertion[]) => {
+    const withIds = assertions.map((a, i) => ({
+      id: `${Date.now()}${i}${Math.random().toString(36).slice(2)}`,
+      field: a.field,
+      operator: a.operator,
+      value: a.value,
+      passed: null,
+    }));
+    // the ref, not activeTabId, because one reply can draft a tab and then put
+    // its tests in it before React has re-rendered with the new active id
+    const targetId = activeTabIdRef.current;
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== targetId) return t;
+        const tests = [...t.tests, ...withIds];
+        // when there is already a response to judge, judge it. leaving fresh
+        // assertions blank next to a visible response reads as broken, and
+        // makes the user hunt for Re-run to learn something we already know.
+        return { ...t, tests: t.response ? runAssertions(tests, t.response) : tests };
+      })
+    );
+  };
+
   const handleSend = async () => {
     if (!activeTab.url.trim()) return;
     updateActiveTab({ loading: true, response: null });
 
     try {
+      // {{name}} is resolved here rather than in the editors, so what the tab
+      // shows stays the reusable version and only the wire sees real values
+      const vars = toMap(variables);
+
       let parsedBody = undefined;
       if (["POST", "PUT", "PATCH"].includes(activeTab.method) && activeTab.body.trim()) {
-        parsedBody = JSON.parse(activeTab.body);
+        parsedBody = JSON.parse(substitute(activeTab.body, vars));
       }
 
       const headerObj: Record<string, string> = {};
       activeTab.headers
         .filter((h) => h.enabled && h.key.trim())
         .forEach((h) => {
-          headerObj[h.key] = h.value;
+          headerObj[h.key] = substitute(h.value, vars);
         });
 
-      const res = await sendRequest(activeTab.method, activeTab.url, headerObj, parsedBody);
+      const res = await sendRequest(
+        activeTab.method,
+        substitute(activeTab.url, vars),
+        headerObj,
+        parsedBody
+      );
+
+      // recorded before the tab updates, so the comparison shown alongside the
+      // new response is against the runs that came before it
+      setTimings((prev) => recordTiming(prev, activeTab.method, activeTab.url, res));
 
       // assertions run on their own after every send. having to remember a
       // second button was the only way to ever see a result before.
@@ -260,6 +550,9 @@ export default function App() {
           history={history}
           onSelectHistory={handleReplayHistory}
           onReset={handleReset}
+          variables={variables}
+          onVariablesChange={setVariables}
+          onExportOpenApi={() => exportOpenApi(routes, projectName, baseUrl)}
         />
 
         <View style={styles.center}>
@@ -269,6 +562,10 @@ export default function App() {
             onSelectTab={setActiveTabId}
             onCloseTab={handleCloseTab}
             onNewTab={handleNewTab}
+            onCloseOthers={handleCloseOthers}
+            onRunAll={handleRunAll}
+            runProgress={runProgress}
+            runSummary={runSummary}
           />
 
           <RequestBuilder
@@ -285,12 +582,14 @@ export default function App() {
             onSend={handleSend}
             loading={activeTab.loading}
             response={activeTab.response}
+            timingNote={timingReport.summary}
           />
 
           <RuntimeTrace
             response={activeTab.response}
             method={activeTab.method}
             url={activeTab.url}
+            comparisons={timingReport.comparisons}
           />
         </View>
 
@@ -300,6 +599,12 @@ export default function App() {
           visible={showAiAgent}
           onClose={() => setShowAiAgent(false)}
           baseUrl={baseUrl}
+          activeTab={activeTabContext}
+          onCreateRequest={handleAgentCreateRequest}
+          onCreateAssertions={handleAgentCreateAssertions}
+          onAgentRequests={handleAgentRequests}
+          onSetVariable={handleAgentSetVariable}
+          variables={toMap(variables)}
         />
       </View>
 
@@ -320,6 +625,8 @@ export default function App() {
         onScan={handleScan}
         scanning={scanning}
         error={error}
+        stage={scanStage}
+        filesFound={scanFilesFound}
       />
     </View>
   );

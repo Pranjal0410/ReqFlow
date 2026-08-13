@@ -6,10 +6,13 @@ import {
   TouchableOpacity,
   Modal,
   StyleSheet,
+  ActivityIndicator,
 } from "react-native";
 import { colors } from "../theme/colors";
 import { radius, shadow } from "../theme/tokens";
 import Icon from "./Icon";
+
+export type ScanStage = "reading" | "analyzing" | null;
 
 interface Props {
   visible: boolean;
@@ -17,10 +20,48 @@ interface Props {
   onScan: (path: string) => void;
   scanning: boolean;
   error?: string | null;
+  stage: ScanStage;
+  // how many route files the backend actually read, null until it says
+  filesFound: number | null;
 }
 
-export default function ScanModal({ visible, onClose, onScan, scanning, error }: Props) {
+export default function ScanModal({
+  visible,
+  onClose,
+  onScan,
+  scanning,
+  error,
+  stage,
+  filesFound,
+}: Props) {
   const [projectPath, setProjectPath] = React.useState("");
+
+  // a scan waits on Gemini, which can take a while. counting up is the honest
+  // way to fill that gap: no invented percentage, just how long it has taken.
+  const [elapsed, setElapsed] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!scanning) {
+      setElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setElapsed(Date.now() - start), 100);
+    return () => clearInterval(id);
+  }, [scanning]);
+
+  const step = (done: boolean, active: boolean, label: string) => (
+    <View style={styles.step}>
+      {done ? (
+        <Icon name="check" size={13} color={colors.statusOk} />
+      ) : active ? (
+        <ActivityIndicator size="small" color={colors.accent} />
+      ) : (
+        <View style={styles.stepDot} />
+      )}
+      <Text style={[styles.stepText, (done || active) && styles.stepTextOn]}>{label}</Text>
+    </View>
+  );
 
   return (
     <Modal visible={visible} transparent animationType="fade">
@@ -39,7 +80,22 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error }:
             onChangeText={setProjectPath}
             autoCapitalize="none"
             autoCorrect={false}
+            editable={!scanning}
           />
+
+          {scanning && (
+            <View style={styles.progress}>
+              {step(
+                stage === "analyzing",
+                stage === "reading",
+                filesFound === null
+                  ? "Reading route files"
+                  : `Read ${filesFound} route file${filesFound === 1 ? "" : "s"}`
+              )}
+              {step(false, stage === "analyzing", "Extracting endpoints")}
+              <Text style={styles.elapsed}>{(elapsed / 1000).toFixed(1)}s</Text>
+            </View>
+          )}
 
           {error && (
             <View style={styles.error}>
@@ -104,6 +160,40 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     marginBottom: 16,
     ...shadow.sm,
+  },
+  progress: {
+    backgroundColor: colors.surfaceLight,
+    borderRadius: radius.md,
+    padding: 12,
+    marginBottom: 14,
+    gap: 8,
+  },
+  step: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 20,
+  },
+  stepDot: {
+    width: 13,
+    height: 13,
+    borderRadius: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  stepText: {
+    flex: 1,
+    color: colors.textDim,
+    fontSize: 12,
+  },
+  stepTextOn: {
+    color: colors.text,
+  },
+  elapsed: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+    textAlign: "right",
   },
   error: {
     flexDirection: "row",

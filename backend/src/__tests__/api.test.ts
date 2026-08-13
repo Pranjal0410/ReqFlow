@@ -313,4 +313,63 @@ describe("POST /api/analyze", () => {
     expect(res.status).toBe(500);
     expect(res.body.error).toMatch(/path not found/i);
   });
+
+  it("serves a second scan of unchanged code from cache without calling Gemini", async () => {
+    const { analyzeCode } = require("../services/gemini");
+    const dir = project({
+      "server.js": `const express = require("express"); app.get("/users", () => {});`,
+    });
+
+    const first = await request(app).post("/api/analyze").send({ projectPath: dir });
+    const callsAfterFirst = (analyzeCode as jest.Mock).mock.calls.length;
+
+    const second = await request(app).post("/api/analyze").send({ projectPath: dir });
+
+    expect(first.body.cached).toBe(false);
+    expect(second.body.cached).toBe(true);
+    expect(second.body.routes).toEqual(first.body.routes);
+    expect((analyzeCode as jest.Mock).mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  it("re-analyses when the code changed, even inside the cache window", async () => {
+    const { analyzeCode } = require("../services/gemini");
+    const dir = project({
+      "server.js": `const express = require("express"); app.get("/users", () => {});`,
+    });
+
+    await request(app).post("/api/analyze").send({ projectPath: dir });
+    const callsAfterFirst = (analyzeCode as jest.Mock).mock.calls.length;
+
+    fs.writeFileSync(
+      path.join(dir, "server.js"),
+      `const express = require("express"); app.get("/users", () => {}); app.get("/orders", () => {});`
+    );
+
+    const second = await request(app).post("/api/analyze").send({ projectPath: dir });
+
+    expect(second.body.cached).toBe(false);
+    expect((analyzeCode as jest.Mock).mock.calls.length).toBe(callsAfterFirst + 1);
+  });
+});
+
+describe("POST /api/analyze/files", () => {
+  it("counts route files without calling Gemini", async () => {
+    const { analyzeCode } = require("../services/gemini");
+    const dir = project({
+      "server.js": `const express = require("express"); app.get("/users", () => {});`,
+      "notes.txt": "not javascript",
+    });
+
+    const callsBefore = (analyzeCode as jest.Mock).mock.calls.length;
+    const res = await request(app).post("/api/analyze/files").send({ projectPath: dir });
+
+    expect(res.status).toBe(200);
+    expect(res.body.filesScanned).toBe(1);
+    expect((analyzeCode as jest.Mock).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("returns 400 when projectPath is missing", async () => {
+    const res = await request(app).post("/api/analyze/files").send({});
+    expect(res.status).toBe(400);
+  });
 });

@@ -7,9 +7,19 @@ const BASE = CONFIG.API_BASE;
 export async function analyzeProject(projectPath: string): Promise<{
   routes: DetectedRoute[];
   filesScanned: number;
+  // true when the backend still had this exact code from an earlier scan, so
+  // the scan modal can say so instead of implying Gemini was asked again
+  cached: boolean;
 }> {
   const res = await axios.post(`${BASE}/analyze`, { projectPath });
   return res.data;
+}
+
+// just the file count, no Gemini call. the scan modal shows this while it is
+// still waiting, so the first step of the progress is a measured number.
+export async function countProjectFiles(projectPath: string): Promise<number> {
+  const res = await axios.post(`${BASE}/analyze/files`, { projectPath });
+  return res.data.filesScanned;
 }
 
 // is the server we are about to call actually up? the proxy reports status 0
@@ -37,4 +47,13 @@ export async function sendRequest(
     body,
   });
   return res.data;
+}
+// built from the routes the client already holds, so this costs no model call
+export async function exportOpenApi(
+  routes: DetectedRoute[],
+  title: string,
+  baseUrl: string
+): Promise<string> {
+  const res = await axios.post(`${BASE}/analyze/openapi`, { routes, title, baseUrl });
+  return JSON.stringify(res.data, null, 2);
 }

@@ -93,6 +93,9 @@ interface Props {
   onCreateAssertions: (assertions: AgentAssertion[]) => void;
   onAgentRequests: (sent: AgentSentRequest[]) => void;
   onSetVariable: (name: string, value: string) => void;
+  // jump to the tab a logged request opened, so the chat can point at the
+  // main screen instead of being the only place the result is readable
+  onFocusRequest: (method: string, url: string) => void;
   variables: Record<string, string>;
 }
 
@@ -106,6 +109,7 @@ export default function AiAgent({
   onCreateAssertions,
   onAgentRequests,
   onSetVariable,
+  onFocusRequest,
   variables,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([
@@ -113,7 +117,7 @@ export default function AiAgent({
       id: "welcome",
       role: "assistant",
       content:
-        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Two limits: I can only reach localhost and private network addresses, and I get 15 actions per conversation.",
+        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Two limits: I can only reach localhost and private network addresses, and I get 30 actions per conversation.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -122,7 +126,7 @@ export default function AiAgent({
   // starting position.
   const [allowWrites, setAllowWrites] = useState(true);
   const [actionsUsed, setActionsUsed] = useState(0);
-  const [actionLimit, setActionLimit] = useState(15);
+  const [actionLimit, setActionLimit] = useState(30);
   // which response in the log is open. one at a time keeps the panel readable.
   const [expanded, setExpanded] = useState<string | null>(null);
   const scrollRef = React.useRef<ScrollView>(null);
@@ -250,18 +254,25 @@ export default function AiAgent({
             return (
               <View key={i}>
                 <Pressable
-                  onPress={() => canOpen && setExpanded(open ? null : key)}
+                  // the row goes to the tab, the chevron peeks at the body
+                  // without leaving the conversation
+                  onPress={() => !t.refused && onFocusRequest(t.method, t.url)}
                   style={({ hovered }: any) => [
                     styles.traceRow,
-                    canOpen && hovered && styles.traceRowHover,
+                    !t.refused && hovered && styles.traceRowHover,
                   ]}
                 >
                   {canOpen ? (
-                    <Icon
-                      name={open ? "chevronDown" : "chevronRight"}
-                      size={11}
-                      color={colors.textDim}
-                    />
+                    <Pressable
+                      onPress={() => setExpanded(open ? null : key)}
+                      style={styles.traceChevron}
+                    >
+                      <Icon
+                        name={open ? "chevronDown" : "chevronRight"}
+                        size={11}
+                        color={colors.textDim}
+                      />
+                    </Pressable>
                   ) : (
                     <View style={styles.traceGutter} />
                   )}
@@ -575,6 +586,10 @@ const styles = StyleSheet.create({
   // keeps lines with no response to open aligned with the ones that have a chevron
   traceGutter: {
     width: 11,
+  },
+  traceChevron: {
+    width: 11,
+    alignItems: "center",
   },
   traceBody: {
     maxHeight: 220,

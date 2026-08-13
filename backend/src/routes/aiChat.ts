@@ -11,8 +11,10 @@ const MAX_TOOL_ROUNDS = 25;
 
 // the agent acts without asking, so the runaway case needs a ceiling rather
 // than a confirmation step. counted across the whole conversation, not per
-// turn, and high enough that ordinary work never reaches it.
-export const MAX_ACTIONS_PER_CHAT = 15;
+// turn. 15 was too tight for the thing this is actually for: a 14 route
+// project needs a login plus one call each, which left nothing for the retries
+// a real run always has.
+export const MAX_ACTIONS_PER_CHAT = 30;
 
 // every tool round costs one model request, so a single "test everything" run
 // can burn a dozen. the lite model has a much larger free tier allowance than

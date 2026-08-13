@@ -427,6 +427,15 @@ export default function App() {
 
   // the agent saves a token here after a login, so every tab can use {{token}}
   // instead of each one carrying its own copy
+  // a run opens more tabs than the bar can show at once, so the log doubles as
+  // the index into them
+  const handleFocusRequest = (method: string, url: string) => {
+    const tab = tabs.find((t) => t.method === method && t.url === url);
+    if (!tab) return;
+    setActiveTabId(tab.id);
+    activeTabIdRef.current = tab.id;
+  };
+
   const handleAgentSetVariable = (name: string, value: string) => {
     setVariables((prev) => {
       const at = prev.findIndex((v) => v.key === name);
@@ -604,6 +613,7 @@ export default function App() {
           onCreateAssertions={handleAgentCreateAssertions}
           onAgentRequests={handleAgentRequests}
           onSetVariable={handleAgentSetVariable}
+          onFocusRequest={handleFocusRequest}
           variables={toMap(variables)}
         />
       </View>

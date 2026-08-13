@@ -1,6 +1,7 @@
 import React from "react";
 import { View, Text, Pressable, ScrollView, StyleSheet, Animated, Easing } from "react-native";
 import { colors } from "../theme/colors";
+import { PhaseComparison } from "../lib/timings";
 import { radius, shadow, transition } from "../theme/tokens";
 import { ServerTimingSpan } from "../types";
 import Icon from "./Icon";
@@ -14,6 +15,8 @@ interface TraceStep {
   // null when the step has no duration to put on a bar in the expanded view
   time: number | null;
   accent: string;
+  // set when earlier runs of this endpoint give a baseline to compare against
+  comparison?: PhaseComparison;
   // true for the spans the target server reported about itself. the ui says so
   // out loud, because those numbers are its word and not our measurement.
   reported?: boolean;
@@ -23,6 +26,8 @@ interface Props {
   response: any;
   method: string;
   url: string;
+  // how this run compares with earlier runs of the same endpoint
+  comparisons: PhaseComparison[];
 }
 
 function safePath(url: string) {
@@ -39,7 +44,10 @@ function ms(value: number) {
   return Number.isInteger(value) ? `${value}` : value.toFixed(1);
 }
 
-function serverSteps(spans: ServerTimingSpan[]): TraceStep[] {
+function serverSteps(
+  spans: ServerTimingSpan[],
+  compareFor: (name: string) => PhaseComparison | undefined
+): TraceStep[] {
   return spans.map((span) => ({
     label: span.name,
     detail: span.description || "server span",
@@ -49,10 +57,13 @@ function serverSteps(spans: ServerTimingSpan[]): TraceStep[] {
     time: span.duration,
     accent: colors.traceProcessing,
     reported: true,
+    // this is the whole point of comparing at all: "slower" is not useful,
+    // "the db span went from 8 ms to 200 ms" is
+    comparison: compareFor(span.name),
   }));
 }
 
-export default function RuntimeTrace({ response, method, url }: Props) {
+export default function RuntimeTrace({ response, method, url, comparisons }: Props) {
   // hooks must run on every render, so the pulse is set up before the
   // early return below
   const pulse = React.useRef(new Animated.Value(1)).current;
@@ -83,6 +94,10 @@ export default function RuntimeTrace({ response, method, url }: Props) {
 
   if (!response) return null;
 
+  // a phase is only annotated when there were enough earlier runs to have a
+  // baseline, so an endpoint you just opened stays uncluttered
+  const compareFor = (name: string) => comparisons.find((c) => c.name === name);
+
   const total = response.timing.total;
   const spans: ServerTimingSpan[] = response.serverTiming ?? [];
 
@@ -108,14 +123,16 @@ export default function RuntimeTrace({ response, method, url }: Props) {
       value: `${ms(ttfb)} ms`,
       time: ttfb,
       accent: colors.traceRequest,
+      comparison: compareFor("ttfb"),
     },
-    ...serverSteps(spans),
+    ...serverSteps(spans, compareFor),
     {
       label: "Download",
       detail: `${response.size ?? 0} B body`,
       value: `${ms(download)} ms`,
       time: download,
       accent: colors.traceProcessing,
+      comparison: compareFor("download"),
     },
     {
       label: "Response",
@@ -162,6 +179,17 @@ export default function RuntimeTrace({ response, method, url }: Props) {
               <Animated.Text style={[styles.traceTime, { opacity: pulse }]}>
                 {step.value}
               </Animated.Text>
+              {step.comparison && (
+                <Text
+                  style={[styles.baseline, step.comparison.slower && styles.baselineSlow]}
+                  numberOfLines={1}
+                >
+                  {step.comparison.slower
+                    ? `${step.comparison.ratio.toFixed(1)}x vs ${ms(step.comparison.baseline)} ms`
+                    : `usual ${ms(step.comparison.baseline)} ms`}
+                  {` (${step.comparison.runs})`}
+                </Text>
+              )}
             </View>
           ))}
         </View>
@@ -341,6 +369,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: "monospace",
     marginBottom: 5,
+  },
+  baseline: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontFamily: "monospace",
+    marginTop: 2,
+  },
+  baselineSlow: {
+    color: colors.statusErr,
   },
   traceTime: {
     color: colors.textDim,

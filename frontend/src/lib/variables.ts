@@ -25,6 +25,26 @@ export function toMap(vars: Variable[]): Record<string, string> {
   return map;
 }
 
+// a login answers with the one value every other request needs, and moving it
+// by hand means reading it out of the body and pasting it into each tab
+const TOKEN_KEYS = /^(token|accesstoken|access_token|idtoken|id_token|jwt|authtoken|auth_token)$/i;
+
+export function findToken(data: any, depth = 0): { path: string; value: string } | null {
+  if (!data || typeof data !== "object" || depth > 3) return null;
+
+  for (const [key, value] of Object.entries(data)) {
+    if (TOKEN_KEYS.test(key) && typeof value === "string" && value.length > 8) {
+      return { path: key, value };
+    }
+  }
+  // one level in is where it usually is: { data: { token } }, { auth: { jwt } }
+  for (const [key, value] of Object.entries(data)) {
+    const found = findToken(value, depth + 1);
+    if (found) return { path: `${key}.${found.path}`, value: found.value };
+  }
+  return null;
+}
+
 export function substitute(text: string, vars: Record<string, string>): string {
   if (!text) return text;
   // an unknown name is left as written rather than blanked, so a typo shows up

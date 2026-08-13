@@ -53,6 +53,9 @@ export interface RequestTab {
   loading: boolean;
   label: string;
   tests: TestCase[];
+  // values for the :name placeholders in url. kept apart from the url so the
+  // placeholder survives being filled in and can be changed again.
+  pathParams: Record<string, string>;
 }
 
 export type SubTab =

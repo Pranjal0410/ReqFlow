@@ -20,6 +20,8 @@ import TestRunner from "./TestRunner";
 import ResponseViewer from "./ResponseViewer";
 import { SubTab, TestCase } from "../types";
 import { paramsFromUrl, urlWithParams } from "../lib/queryParams";
+import { namesIn, unfilled } from "../lib/pathParams";
+import { placeholderFields } from "../lib/placeholders";
 
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
@@ -47,6 +49,10 @@ interface Props {
   // used only to word the empty state: whether a scan has happened yet
   routeCount: number;
   onScanPress: () => void;
+  pathParams: Record<string, string>;
+  onPathParamsChange: (values: Record<string, string>) => void;
+  onSaveToken: (value: string) => void;
+  savedToken?: string | null;
 }
 
 export default function RequestBuilder({
@@ -66,6 +72,10 @@ export default function RequestBuilder({
   timingNote,
   routeCount,
   onScanPress,
+  pathParams,
+  onPathParamsChange,
+  onSaveToken,
+  savedToken,
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
@@ -85,6 +95,13 @@ export default function RequestBuilder({
     const id = setInterval(() => setElapsed(Date.now() - start), 100);
     return () => clearInterval(id);
   }, [loading]);
+
+  // opening a route with :id in it lands you where you have to type, once,
+  // without fighting a later choice to look at something else
+  React.useEffect(() => {
+    if (unfilled(url, pathParams).length > 0) setActiveSubTab("params");
+    // only when the request itself changes, not on every keystroke in the box
+  }, [url]);
 
   // ctrl+enter / cmd+enter sends. web only, a phone has no such shortcut.
   React.useEffect(() => {
@@ -125,7 +142,14 @@ export default function RequestBuilder({
 
   // pressing Send on an empty url used to do nothing at all, with no hint that
   // anything was missing, which reads as the app being broken
-  const canSend = url.trim().length > 0;
+  const pathNames = namesIn(url);
+  // not a reason to block: some apis really do accept any string. it is a
+  // reason to say so before the request comes back rejected.
+  const placeholders = placeholderFields(body);
+  const missingPath = unfilled(url, pathParams);
+  // sending /api/incidents/:id verbatim only ever produces a confusing 404, so
+  // say what is missing instead of letting it go
+  const canSend = url.trim().length > 0 && missingPath.length === 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
   const ok = response && response.status >= 200 && response.status < 400;
@@ -197,6 +221,16 @@ export default function RequestBuilder({
         </Pressable>
       </View>
 
+      {/* under the url rather than in one sub tab's toolbar, so the reason Send
+          is disabled is visible from wherever you happen to be */}
+      {!canSend && (
+        <Text style={styles.blocked}>
+          {missingPath.length
+            ? `Fill ${missingPath.map((n) => ":" + n).join(", ")} under Params before sending`
+            : "Enter a URL to send"}
+        </Text>
+      )}
+
       {/* method picker */}
       {showMethodPicker && (
         <View style={styles.methodPicker}>
@@ -256,6 +290,7 @@ export default function RequestBuilder({
         onSelect={setActiveSubTab}
         headerCount={enabledHeaderCount}
         hasBody={body.trim().length > 0}
+        pathPending={missingPath.length}
       />
 
       {/* sub tab content */}
@@ -278,13 +313,15 @@ export default function RequestBuilder({
                   {formatError}
                 </Text>
               )}
+              {!formatError && placeholders.length > 0 && (
+                <Text style={styles.placeholderNote} numberOfLines={1}>
+                  {placeholders.join(", ")} still {placeholders.length === 1 ? "says" : "say"} what
+                  type to put there
+                </Text>
+              )}
               <View style={{ flex: 1 }} />
               <Text style={styles.hint}>
-                {!canSend
-                  ? "enter a URL to send"
-                  : Platform.OS === "web"
-                  ? "Ctrl+Enter to send"
-                  : ""}
+                {Platform.OS === "web" ? "Ctrl+Enter to send" : ""}
               </Text>
             </View>
             <TextInput
@@ -326,6 +363,28 @@ export default function RequestBuilder({
         )}
 
         {activeSubTab === "params" && (
+          <View>
+            {/* a scanned route arrives with :id in it. filling it here keeps the
+                placeholder in the url, so it can be changed again later. */}
+            {pathNames.length > 0 && (
+              <View style={styles.pathBox}>
+                <Text style={styles.pathTitle}>Path</Text>
+                {pathNames.map((name) => (
+                  <View key={name} style={styles.pathRow}>
+                    <Text style={styles.pathName}>:{name}</Text>
+                    <TextInput
+                      style={styles.pathInput}
+                      placeholder={`value for :${name}`}
+                      placeholderTextColor={colors.textDim}
+                      value={pathParams[name] || ""}
+                      onChangeText={(v) => onPathParamsChange({ ...pathParams, [name]: v })}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                    />
+                  </View>
+                ))}
+              </View>
+            )}
           <HeadersEditor
             headers={paramsFromUrl(url)}
             onChange={(rows) => onUrlChange(urlWithParams(url, rows))}
@@ -334,6 +393,7 @@ export default function RequestBuilder({
             emptyHint="No query parameters. Adding one here writes it into the URL."
             showToggle={false}
           />
+          </View>
         )}
 
 
@@ -342,7 +402,13 @@ export default function RequestBuilder({
         )}
       </View>
 
-      <ResponseViewer response={response} loading={loading} timingNote={timingNote} />
+      <ResponseViewer
+        response={response}
+        loading={loading}
+        timingNote={timingNote}
+        onSaveToken={onSaveToken}
+        savedTokenPath={savedToken}
+      />
       </>
       )}
     </View>
@@ -428,6 +494,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "500",
   },
+  placeholderNote: {
+    flex: 1,
+    color: colors.textDim,
+    fontSize: 11,
+  },
   formatError: {
     flex: 1,
     color: colors.statusErr,
@@ -489,6 +560,49 @@ const styles = StyleSheet.create({
   },
   subContent: {
     minHeight: 100,
+  },
+  blocked: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+    paddingHorizontal: 14,
+    marginTop: -4,
+    marginBottom: 6,
+  },
+  pathBox: {
+    paddingHorizontal: 12,
+    paddingTop: 12,
+  },
+  pathTitle: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  pathRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
+  pathName: {
+    color: colors.accent,
+    fontSize: 12,
+    fontFamily: "monospace",
+    width: 110,
+  },
+  pathInput: {
+    flex: 1,
+    backgroundColor: colors.surfaceLight,
+    color: colors.text,
+    borderRadius: radius.md,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    fontSize: 12,
+    fontFamily: "monospace",
+    ...shadow.sm,
   },
   blank: {
     flex: 1,

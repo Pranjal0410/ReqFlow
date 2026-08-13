@@ -14,7 +14,11 @@ frontend. It runs in the browser today and is meant to run on a phone too.
 
 **Scans a project.** Walks the folder, keeps files that look like they define
 routes, and asks Gemini to pull out the method, path and expected body for each
-one. Everything it finds shows up in the sidebar, grouped by path. Re-scanning
+one. The body is filled from what the code actually requires, reading its
+validators, enums and defaults, so a scanned POST can usually be sent as it
+arrives rather than edited field by field. Where a value has no source in the
+code, an id of another record for instance, the editor says which fields are
+still standing in for a type. Everything it finds shows up in the sidebar, grouped by path. Re-scanning
 the same folder is served from a cache keyed on the contents of the files, so
 edited code still gets a fresh look but an unchanged project does not spend the
 quota twice.
@@ -22,6 +26,17 @@ quota twice.
 **Sends requests.** Method, URL, query parameters, headers, JSON body, bearer
 token. Multiple tabs so you can keep a few requests open at once. Export any of
 them as a runnable curl command, or the whole scan as an OpenAPI document.
+
+A scanned route like `/api/incidents/:id` opens with the placeholder still in
+it. Filling it in under Params substitutes it on the way out, so the url keeps
+the `:id` and can be pointed at a different record later. Send stays disabled
+until the placeholder has a value, rather than issuing a request that can only
+404.
+
+**Carries the token for you.** When a response body contains something that
+looks like a credential, the response header offers to save it as `{{token}}`
+in one click. Every tab can then use it, instead of the value being read out of
+the body and pasted into each one.
 
 **Shows what actually happened.** Status, response headers, syntax highlighted
 JSON, and a timing breakdown. The timings are measured, not estimated: the
@@ -118,7 +133,7 @@ address written down, since `localhost` there is the phone: set `DEV_IP` in
 
 ```bash
 cd backend && npm test     # 85
-cd frontend && npm test    # 45
+cd frontend && npm test    # 65
 ```
 
 The backend covers the proxy, the target guard, the analyze route and its cache,
@@ -126,8 +141,8 @@ the Server-Timing parser, the OpenAPI builder, the port detector, and the
 agent's tools including the action cap. They spin up their own throwaway server instead of calling a
 public API, and Gemini is mocked, so they run offline and cost nothing.
 
-The frontend suite is limited to `src/lib`: variables, query parameters, url
-normalisation and the timing comparison. Components would need a react-native renderer, which those
+The frontend suite is limited to `src/lib`: variables, query and path
+parameters, url normalisation and the timing comparison. Components would need a react-native renderer, which those
 files do not justify yet.
 
 ## How it is put together
@@ -139,7 +154,8 @@ backend/
                targetGuard
 frontend/
   components/  sidebar, tabs, request builder, response viewer, trace, agent
-  lib/         assertions, persistence, url, variables, query params, timings
+  lib/         assertions, persistence, url, variables, query params,
+               path params, placeholders, timings
 ```
 
 Requests go through the backend rather than straight from the browser, which

@@ -28,6 +28,8 @@ export interface Workspace {
   history: HistoryEntry[];
   variables: Variable[];
   timings: TimingHistory;
+  // folders already scanned, so the path does not have to be typed out again
+  recentScans: string[];
 }
 
 // tabId -> headerName -> value
@@ -175,6 +177,7 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     variables: restoreVars(Array.isArray(parsed.variables) ? parsed.variables : [], secrets),
     // measurements, not credentials, so they ride along in the workspace blob
     timings: parsed.timings && typeof parsed.timings === "object" ? parsed.timings : {},
+    recentScans: Array.isArray(parsed.recentScans) ? parsed.recentScans : [],
   };
 }
 

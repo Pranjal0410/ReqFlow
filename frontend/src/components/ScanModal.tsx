@@ -4,6 +4,7 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Pressable,
   Modal,
   StyleSheet,
   ActivityIndicator,
@@ -19,9 +20,10 @@ interface Props {
   onScan: (path: string, baseUrl: string) => void;
   scanning: boolean;
   error?: string | null;
+  recent: string[];
 }
 
-export default function ScanModal({ visible, onClose, onScan, scanning, error }: Props) {
+export default function ScanModal({ visible, onClose, onScan, scanning, error, recent }: Props) {
   const [projectPath, setProjectPath] = React.useState("");
   const [baseUrl, setBaseUrl] = React.useState("");
   // set once the user edits the field, so a later probe cannot overwrite them
@@ -118,6 +120,24 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error }:
             autoCorrect={false}
             editable={!scanning}
           />
+
+          {/* the path is long and typed from memory, and most scans are of a
+              folder already scanned once */}
+          {!projectPath && recent.length > 0 && (
+            <View style={styles.recentBox}>
+              {recent.map((p) => (
+                <Pressable
+                  key={p}
+                  style={({ hovered }: any) => [styles.recent, hovered && styles.recentHover]}
+                  onPress={() => setProjectPath(p)}
+                >
+                  <Text style={styles.recentText} numberOfLines={1}>
+                    {p.split("/").filter(Boolean).slice(-2).join("/")}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
 
           {probing && <Text style={styles.probe}>reading folder...</Text>}
           {!probing && probeError && <Text style={styles.probeBad}>{probeError}</Text>}
@@ -221,6 +241,25 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     marginBottom: 16,
     ...shadow.sm,
+  },
+  recentBox: {
+    marginTop: -10,
+    marginBottom: 12,
+    gap: 4,
+  },
+  recent: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceLight,
+  },
+  recentHover: {
+    backgroundColor: colors.hover,
+  },
+  recentText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
   },
   label: {
     color: colors.textDim,

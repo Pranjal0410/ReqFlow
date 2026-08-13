@@ -1,4 +1,4 @@
-import { isSecretVariable, missingIn, substitute, toMap } from "../variables";
+import { findToken, isSecretVariable, missingIn, substitute, toMap } from "../variables";
 
 const vars = toMap([
   { key: "token", value: "abc123" },
@@ -46,5 +46,40 @@ describe("isSecretVariable", () => {
 
   it("leaves ordinary names alone", () => {
     ["host", "page", "userId"].forEach((n) => expect(isSecretVariable(n)).toBe(false));
+  });
+});
+
+// a login answers with the value every other request needs, and moving it by
+// hand meant reading it out of the body and pasting it into each tab
+describe("findToken", () => {
+  it("finds a top level token", () => {
+    expect(findToken({ token: "abcdefghijk" })).toEqual({ path: "token", value: "abcdefghijk" });
+  });
+
+  it("looks one level in", () => {
+    expect(findToken({ data: { accessToken: "abcdefghijk" } })).toEqual({
+      path: "data.accessToken",
+      value: "abcdefghijk",
+    });
+  });
+
+  it("knows the usual spellings", () => {
+    ["access_token", "idToken", "jwt", "authToken"].forEach((k) =>
+      expect(findToken({ [k]: "abcdefghijk" })?.value).toBe("abcdefghijk")
+    );
+  });
+
+  it("ignores a field that merely mentions a token", () => {
+    expect(findToken({ tokenExpiry: "3600", message: "token issued" })).toBeNull();
+  });
+
+  it("ignores something too short to be one", () => {
+    expect(findToken({ token: "no" })).toBeNull();
+  });
+
+  it("returns nothing for a body with no credential in it", () => {
+    expect(findToken({ user: { email: "a@b.c" } })).toBeNull();
+    expect(findToken(null)).toBeNull();
+    expect(findToken("a string")).toBeNull();
   });
 });

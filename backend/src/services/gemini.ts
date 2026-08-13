@@ -23,10 +23,18 @@ for each route return:
 - params (array of path or query params)
 - body (example JSON payload if its POST/PUT, null otherwise)
 
+the body is going to be sent as-is by someone testing the endpoint, so fill it
+with values that would actually pass. read the validators, schemas, enums and
+defaults in the code and use them: if severity must be one of low, medium or
+high, pick one of those, not the word "string". write a plausible title rather
+than "string", a well formed email rather than "string", a number where a
+number is expected. only fall back to a placeholder for a value the code gives
+you no way to guess, such as an id of another record.
+
 return ONLY a valid JSON array. no markdown, no backticks, no explanation.
 
 example format:
-[{"method":"POST","path":"/users","description":"creates a new user","params":[],"body":{"name":"string","email":"string"}}]
+[{"method":"POST","path":"/users","description":"creates a new user","params":[],"body":{"name":"Ada Lovelace","email":"ada@example.com","age":36}}]
 
 code:
 ${codeBlock}`;

@@ -12,20 +12,31 @@ import { colors } from "../theme/colors";
 import { radius, shadow, glow, transition } from "../theme/tokens";
 import Icon from "./Icon";
 import JsonView from "./JsonView";
+import { findToken } from "../lib/variables";
 
 interface Props {
   response: any;
   loading?: boolean;
+  // offered when the body carries something that looks like a credential
+  onSaveToken?: (value: string) => void;
+  savedTokenPath?: string | null;
   // how this run compares with earlier runs of the same endpoint, or null when
   // there is not enough history to say anything
   timingNote?: { text: string; slower: boolean } | null;
 }
 
-export default function ResponseViewer({ response, loading, timingNote }: Props) {
+export default function ResponseViewer({ response, loading, timingNote, onSaveToken, savedTokenPath }: Props) {
   const [raw, setRaw] = React.useState(false);
   const [showHeaders, setShowHeaders] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const bodyRef = React.useRef<ScrollView>(null);
+
+  // the value every later request needs, offered where it appears instead of
+  // leaving it to be read out of the body and pasted into each tab
+  const token = React.useMemo(
+    () => (response ? findToken(response.data) : null),
+    [response]
+  );
 
   // a re-sent request reuses this view, and the old scroll offset survives, so
   // a fresh response would open somewhere in its middle
@@ -128,6 +139,27 @@ export default function ResponseViewer({ response, loading, timingNote }: Props)
             <Text style={[styles.segmentText, raw && styles.segmentTextOn]}>Raw</Text>
           </Pressable>
         </View>
+
+        {token && onSaveToken && (
+          <Pressable
+            style={({ hovered }: any) => [styles.action, hovered && styles.actionHover]}
+            onPress={() => onSaveToken(token.value)}
+          >
+            <Icon
+              name={savedTokenPath === token.value ? "check" : "sparkle"}
+              size={13}
+              color={savedTokenPath === token.value ? colors.statusOk : colors.accent}
+            />
+            <Text
+              style={[
+                styles.actionText,
+                { color: savedTokenPath === token.value ? colors.statusOk : colors.accent },
+              ]}
+            >
+              {savedTokenPath === token.value ? "Saved as {{token}}" : `Use ${token.path}`}
+            </Text>
+          </Pressable>
+        )}
 
         <Pressable
           style={({ hovered }: any) => [styles.action, hovered && styles.actionHover]}

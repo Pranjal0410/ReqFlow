@@ -22,8 +22,13 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 
+// bumped when the analyze prompt changes, so a cached scan is not served with
+// answers the old prompt produced
+const PROMPT_VERSION = "2";
+
 function fingerprint(files: { path: string; content: string }[]): string {
   const hash = crypto.createHash("sha1");
+  hash.update(PROMPT_VERSION);
   for (const f of files) {
     hash.update(f.path);
     hash.update("\0");

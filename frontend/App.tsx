@@ -26,6 +26,7 @@ import { runAssertions } from "./src/lib/assertions";
 import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
 import { Variable, toMap, substitute } from "./src/lib/variables";
 import { withScheme, originOf } from "./src/lib/url";
+import { applyPathParams } from "./src/lib/pathParams";
 import {
   TimingHistory,
   record as recordTiming,
@@ -46,6 +47,7 @@ function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
     loading: false,
     label: route ? `${route.method} ${route.path}` : "New Request",
     tests: [],
+    pathParams: {},
   };
 }
 
@@ -63,6 +65,7 @@ export default function App() {
   const [variables, setVariables] = useState<Variable[]>([]);
   // per endpoint timing samples, so a response can be read against its own past
   const [timings, setTimings] = useState<TimingHistory>({});
+  const [recentScans, setRecentScans] = useState<string[]>([]);
 
   // nothing is written back until the saved workspace has been read, otherwise
   // the empty first render would immediately overwrite it
@@ -81,6 +84,7 @@ export default function App() {
         setHistory(saved.history);
         setVariables(saved.variables || []);
         setTimings(saved.timings || {});
+        setRecentScans(saved.recentScans || []);
       }
       if (!cancelled) setHydrated(true);
     })();
@@ -103,10 +107,11 @@ export default function App() {
         history,
         variables,
         timings,
+        recentScans,
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings]);
+  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -226,6 +231,7 @@ export default function App() {
       setRoutes(result.routes);
       setProjectName(projectPath.split("/").pop() || "Project");
       setBaseUrl(withScheme(scannedBaseUrl));
+      setRecentScans((prev) => [projectPath, ...prev.filter((p) => p !== projectPath)].slice(0, 4));
       setShowScan(false);
     } catch (err: any) {
       const detail = err?.response?.data?.error || err?.message || "unknown error";
@@ -292,7 +298,7 @@ export default function App() {
 
         const res = await sendRequest(
           tab.method,
-          withScheme(substitute(tab.url, vars)),
+          withScheme(applyPathParams(substitute(tab.url, vars), tab.pathParams || {})),
           headerObj,
           parsedBody
         );
@@ -343,6 +349,7 @@ export default function App() {
     setHistory([]);
     setVariables([]);
     setTimings({});
+    setRecentScans([]);
     setProjectName("ReqFlow");
     setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
@@ -507,7 +514,7 @@ export default function App() {
 
       const res = await sendRequest(
         activeTab.method,
-        withScheme(substitute(activeTab.url, vars)),
+        withScheme(applyPathParams(substitute(activeTab.url, vars), activeTab.pathParams || {})),
         headerObj,
         parsedBody
       );
@@ -606,6 +613,10 @@ export default function App() {
             response={activeTab.response}
             timingNote={timingReport.summary}
             routeCount={routes.length}
+            pathParams={activeTab.pathParams || {}}
+            onPathParamsChange={(v) => updateActiveTab({ pathParams: v })}
+            onSaveToken={(value) => handleAgentSetVariable("token", value)}
+            savedToken={toMap(variables).token || null}
             onScanPress={() => {
               setError(null);
               setShowScan(true);
@@ -615,7 +626,12 @@ export default function App() {
           <RuntimeTrace
             response={activeTab.response}
             method={activeTab.method}
-            url={activeTab.url}
+            // the trace describes a request that happened, so it shows the
+            // address that was actually used rather than the :id placeholder
+            url={applyPathParams(
+              substitute(activeTab.url, toMap(variables)),
+              activeTab.pathParams || {}
+            )}
             comparisons={timingReport.comparisons}
           />
         </View>
@@ -653,6 +669,7 @@ export default function App() {
         onScan={handleScan}
         scanning={scanning}
         error={error}
+        recent={recentScans}
       />
     </View>
   );

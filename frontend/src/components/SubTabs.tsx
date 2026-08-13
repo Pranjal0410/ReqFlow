@@ -16,11 +16,12 @@ interface Props {
   onSelect: (tab: SubTab) => void;
   headerCount: number;
   hasBody: boolean;
+  pathPending: number;
 }
 
-export default function SubTabs({ activeSubTab, onSelect, headerCount, hasBody }: Props) {
+export default function SubTabs({ activeSubTab, onSelect, headerCount, hasBody, pathPending }: Props) {
   const tabs: TabInfo[] = [
-    { key: "params", label: "Params" },
+    { key: "params", label: "Params", count: pathPending, hasDot: pathPending > 0 },
     { key: "headers", label: "Headers", count: headerCount },
     { key: "body", label: "Body", hasDot: hasBody },
     { key: "auth", label: "Auth" },

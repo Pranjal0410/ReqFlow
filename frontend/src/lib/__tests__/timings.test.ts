@@ -123,3 +123,41 @@ describe("compare", () => {
     expect(compare({}, "GET", URL, response(500))).toEqual([]);
   });
 });
+
+// a 401 rejected at the door and a 200 that returns a payload are different
+// operations. mixing them reported a regression the moment you logged in.
+describe("status classes", () => {
+  function withStatuses(pairs: [number, number][]): TimingHistory {
+    let h: TimingHistory = {};
+    pairs.forEach(([status, total]) => {
+      h = record(h, "GET", URL, { ...response(total), status });
+    });
+    return h;
+  }
+
+  it("does not measure a success against a run of rejections", () => {
+    const history = withStatuses([[401, 7], [401, 5], [401, 6]]);
+    expect(summarise(history, "GET", URL, { ...response(400), status: 200 })).toBeNull();
+  });
+
+  it("uses only the successful runs once there are enough of them", () => {
+    const history = withStatuses([
+      [401, 7], [401, 5],
+      [200, 400], [200, 420], [200, 410],
+    ]);
+
+    const out = summarise(history, "GET", URL, { ...response(430), status: 200 })!;
+    expect(out.slower).toBe(false);
+    expect(out.text).toMatch(/410 ms over 3 runs/);
+  });
+
+  it("keeps 200 and 201 in the same bucket", () => {
+    const history = withStatuses([[200, 100], [201, 100], [200, 100]]);
+    expect(summarise(history, "GET", URL, { ...response(110), status: 201 })).not.toBeNull();
+  });
+
+  it("compares phases within the same class too", () => {
+    const history = withStatuses([[401, 5], [401, 5], [401, 5]]);
+    expect(compare(history, "GET", URL, { ...response(500), status: 200 })).toEqual([]);
+  });
+});

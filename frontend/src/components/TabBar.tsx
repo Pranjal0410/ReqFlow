@@ -14,7 +14,7 @@ interface Props {
   onCloseOthers: () => void;
   onRunAll: () => void;
   runProgress: { done: number; total: number } | null;
-  runSummary: { passed: number; failed: number; errors: number } | null;
+  runSummary: { passed: number; failed: number; errors: number; sent: number } | null;
 }
 
 export default function TabBar({
@@ -144,9 +144,19 @@ export default function TabBar({
           not drift off with the tabs. */}
       {runSummary && !runProgress && (
         <Text style={styles.runSummary}>
-          <Text style={{ color: colors.statusOk }}>{runSummary.passed} passed</Text>
-          {runSummary.failed > 0 && (
-            <Text style={{ color: colors.statusErr }}> · {runSummary.failed} failed</Text>
+          {/* with no assertions anywhere, "0 passed" reads as a failure. say
+              what actually happened instead. */}
+          {runSummary.passed + runSummary.failed === 0 ? (
+            <Text>
+              {runSummary.sent} sent, no assertions
+            </Text>
+          ) : (
+            <>
+              <Text style={{ color: colors.statusOk }}>{runSummary.passed} passed</Text>
+              {runSummary.failed > 0 && (
+                <Text style={{ color: colors.statusErr }}> · {runSummary.failed} failed</Text>
+              )}
+            </>
           )}
           {runSummary.errors > 0 && <Text> · {runSummary.errors} not sent</Text>}
         </Text>

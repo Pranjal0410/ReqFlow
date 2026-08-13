@@ -94,3 +94,21 @@ describe("readProjectFiles", () => {
     );
   });
 });
+
+// a scan used to die on the first dangling symlink it met, reporting the raw
+// errno to the user, because statSync follows the link
+describe("readProjectFiles resilience", () => {
+  it("walks past a symlink whose target is gone", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-broken-"));
+    fs.writeFileSync(
+      path.join(dir, "server.js"),
+      'const express = require("express"); app.get("/users", () => {});'
+    );
+    fs.symlinkSync(path.join(dir, "does-not-exist"), path.join(dir, "dangling"));
+
+    const files = readProjectFiles(dir);
+
+    expect(files).toHaveLength(1);
+    expect(files[0].path).toMatch(/server\.js$/);
+  });
+});

@@ -5,17 +5,26 @@ const SKIP_DIRS = ["node_modules", ".git", "dist", "build", ".expo"];
 const VALID_EXT = [".js", ".ts", ".jsx", ".tsx"];
 
 function walkDir(dir: string, files: string[] = []): string[] {
-  const entries = fs.readdirSync(dir);
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    // a directory we are not allowed to open is not a reason to abandon the
+    // scan of everything else
+    return files;
+  }
 
   for (const entry of entries) {
-    const fullPath = path.join(dir, entry);
-    const stat = fs.statSync(fullPath);
+    const fullPath = path.join(dir, entry.name);
 
-    if (stat.isDirectory()) {
-      if (!SKIP_DIRS.includes(entry)) {
+    // withFileTypes answers from the directory entry, so a symlink pointing at
+    // something deleted is reported rather than throwing the way stat did. one
+    // dangling link used to kill the whole scan with a raw ENOENT.
+    if (entry.isDirectory()) {
+      if (!SKIP_DIRS.includes(entry.name)) {
         walkDir(fullPath, files);
       }
-    } else if (VALID_EXT.includes(path.extname(entry))) {
+    } else if (entry.isFile() && VALID_EXT.includes(path.extname(entry.name))) {
       files.push(fullPath);
     }
   }
@@ -34,10 +43,16 @@ export function readProjectFiles(projectPath: string): { path: string; content: 
   const routeKeywords = ["router", "app.get", "app.post", "app.put", "app.delete", "express", "Route"];
 
   const relevant = files
-    .map((f) => ({
-      path: f,
-      content: fs.readFileSync(f, "utf-8"),
-    }))
+    .map((f) => {
+      try {
+        return { path: f, content: fs.readFileSync(f, "utf-8") };
+      } catch {
+        // deleted between the walk and the read, or simply unreadable. skipping
+        // one file is better than failing the scan with its errno.
+        return null;
+      }
+    })
+    .filter((f): f is { path: string; content: string } => f !== null)
     .filter((f) => routeKeywords.some((kw) => f.content.includes(kw)));
 
   return relevant;

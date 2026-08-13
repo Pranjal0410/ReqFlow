@@ -259,7 +259,12 @@ export default function App() {
   // agent run already exercises a whole flow, this is how you repeat it later
   // without asking the agent again.
   const [runProgress, setRunProgress] = useState<{ done: number; total: number } | null>(null);
-  const [runSummary, setRunSummary] = useState<{ passed: number; failed: number; errors: number } | null>(null);
+  const [runSummary, setRunSummary] = useState<{
+    passed: number;
+    failed: number;
+    errors: number;
+    sent: number;
+  } | null>(null);
 
   const handleRunAll = async () => {
     const runnable = tabs.filter((t) => t.url.trim());
@@ -272,6 +277,7 @@ export default function App() {
     let passed = 0;
     let failed = 0;
     let errors = 0;
+    let sentCount = 0;
 
     // one at a time, so a dev server is not hit with the whole workspace at once
     for (let i = 0; i < runnable.length; i++) {
@@ -299,6 +305,7 @@ export default function App() {
       const tested = runAssertions(tab.tests, res);
         tested.forEach((t) => (t.passed ? passed++ : failed++));
 
+        sentCount++;
         setTabs((prev) =>
           prev.map((t) => (t.id === tab.id ? { ...t, response: res, tests: tested, loading: false } : t))
         );
@@ -311,7 +318,7 @@ export default function App() {
     }
 
     setRunProgress(null);
-    setRunSummary({ passed, failed, errors });
+    setRunSummary({ passed, failed, errors, sent: sentCount });
   };
 
   // an agent run leaves a tab per request, and they persist. this is the way

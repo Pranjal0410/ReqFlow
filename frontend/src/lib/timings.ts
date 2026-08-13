@@ -28,6 +28,13 @@ const MIN_FOR_BASELINE = 3;
 const SLOW_RATIO = 1.5;
 const SLOW_ABSOLUTE_MS = 20;
 
+// a 401 that is rejected before any work happens and a 200 that returns a
+// payload are not the same operation, so they do not belong in one baseline.
+// comparing across them reports "16x slower" the moment you log in.
+function sameKind(a: number, b: number): boolean {
+  return Math.floor(a / 100) === Math.floor(b / 100);
+}
+
 export function endpointKey(method: string, url: string): string {
   // "localhost:3001/x" does not throw: URL reads localhost: as the protocol and
   // hands back "3001/x" as the path. checking the protocol is what separates a
@@ -119,7 +126,9 @@ export function compare(
   url: string,
   response: ApiResponse
 ): PhaseComparison[] {
-  const prior = history[endpointKey(method, url)] || [];
+  const prior = (history[endpointKey(method, url)] || []).filter((s) =>
+    sameKind(s.status, response.status)
+  );
   if (prior.length < MIN_FOR_BASELINE) return [];
 
   const out: PhaseComparison[] = [];
@@ -149,7 +158,9 @@ export function summarise(
   url: string,
   response: ApiResponse
 ): { text: string; slower: boolean } | null {
-  const prior = history[endpointKey(method, url)] || [];
+  const prior = (history[endpointKey(method, url)] || []).filter((s) =>
+    sameKind(s.status, response.status)
+  );
   if (prior.length < MIN_FOR_BASELINE) return null;
 
   const baseline = median(prior.map((s) => s.total));

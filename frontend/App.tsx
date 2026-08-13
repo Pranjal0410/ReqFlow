@@ -10,12 +10,11 @@ import AiAgent, {
 import TabBar from "./src/components/TabBar";
 import RequestBuilder from "./src/components/RequestBuilder";
 import RuntimeTrace from "./src/components/RuntimeTrace";
-import ScanModal, { ScanStage } from "./src/components/ScanModal";
+import ScanModal from "./src/components/ScanModal";
 import Toast from "./src/components/Toast";
 import AppStatusBar from "./src/components/StatusBar";
 import {
   analyzeProject,
-  countProjectFiles,
   sendRequest,
   checkTarget,
   exportOpenApi,
@@ -55,8 +54,6 @@ export default function App() {
   const [tabs, setTabs] = useState<RequestTab[]>([createTab(CONFIG.DEFAULT_TARGET)]);
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
   const [scanning, setScanning] = useState(false);
-  const [scanStage, setScanStage] = useState<ScanStage>(null);
-  const [scanFilesFound, setScanFilesFound] = useState<number | null>(null);
   const [showScan, setShowScan] = useState(false);
   const [showAiAgent, setShowAiAgent] = useState(true);
   const [projectName, setProjectName] = useState("ReqFlow");
@@ -171,14 +168,22 @@ export default function App() {
     };
   }, [activeTab.response, activeTab.method, activeTab.url, timings]);
 
-  // the server the active request points at, if the url parses
+  // the server the active request points at. an empty tab falls back to the
+  // base url, because saying "no target" right after the user named one reads
+  // as the app having ignored them. before a scan that url is still the default
+  // nobody chose, so it stays "no target" rather than announcing a server the
+  // user has not pointed at.
   const target = React.useMemo(() => {
-    try {
-      return new URL(activeTab.url).origin;
-    } catch {
-      return null;
+    const candidates = routes.length > 0 ? [activeTab.url, baseUrl] : [activeTab.url];
+    for (const candidate of candidates) {
+      try {
+        return new URL(candidate).origin;
+      } catch {
+        // try the next one
+      }
     }
-  }, [activeTab.url]);
+    return null;
+  }, [activeTab.url, baseUrl, routes.length]);
 
   // poll it so the status badge reflects reality instead of just asserting it
   const [targetUp, setTargetUp] = useState<boolean | null>(null);
@@ -214,29 +219,21 @@ export default function App() {
     );
   };
 
-  const handleScan = async (projectPath: string) => {
+  // the base url comes from the modal now: a scan that leaves it at a default
+  // points every route it just found at whatever happens to run on port 3000
+  const handleScan = async (projectPath: string, scannedBaseUrl: string) => {
     setScanning(true);
-    setScanStage("reading");
-    setScanFilesFound(null);
     try {
-      try {
-        setScanFilesFound(await countProjectFiles(projectPath));
-      } catch {
-        // only feeds the progress display. a path that does not exist still
-        // fails properly on the scan below, with the backend's own message.
-      }
-      setScanStage("analyzing");
-
       const result = await analyzeProject(projectPath);
       setRoutes(result.routes);
       setProjectName(projectPath.split("/").pop() || "Project");
+      setBaseUrl(scannedBaseUrl);
       setShowScan(false);
     } catch (err: any) {
       const detail = err?.response?.data?.error || err?.message || "unknown error";
       setError(`Scan failed: ${detail}`);
     } finally {
       setScanning(false);
-      setScanStage(null);
     }
   };
 
@@ -319,6 +316,9 @@ export default function App() {
 
     setRunProgress(null);
     setRunSummary({ passed, failed, errors, sent: sentCount });
+    // the result sits on the run button, so it has to hand the button back
+    // eventually or there is no visible way to run again
+    setTimeout(() => setRunSummary(null), 8000);
   };
 
   // an agent run leaves a tab per request, and they persist. this is the way
@@ -607,6 +607,11 @@ export default function App() {
             loading={activeTab.loading}
             response={activeTab.response}
             timingNote={timingReport.summary}
+            routeCount={routes.length}
+            onScanPress={() => {
+              setError(null);
+              setShowScan(true);
+            }}
           />
 
           <RuntimeTrace
@@ -650,8 +655,6 @@ export default function App() {
         onScan={handleScan}
         scanning={scanning}
         error={error}
-        stage={scanStage}
-        filesFound={scanFilesFound}
       />
     </View>
   );

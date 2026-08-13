@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { readProjectFiles } from "../services/fileReader";
 import { analyzeCode } from "../services/gemini";
 import { buildOpenApi } from "../services/openapi";
+import { detectPort } from "../services/portDetector";
 import { DetectedRoute } from "../types";
 
 const router = Router();
@@ -43,7 +44,9 @@ router.post("/files", (req: Request, res: Response) => {
 
   try {
     const files = readProjectFiles(projectPath);
-    res.json({ filesScanned: files.length });
+    // the scan modal fills its base url box from this, so the user confirms a
+    // port rather than being asked to remember one
+    res.json({ filesScanned: files.length, detectedPort: detectPort(projectPath, files) });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

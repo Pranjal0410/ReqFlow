@@ -15,11 +15,19 @@ export async function analyzeProject(projectPath: string): Promise<{
   return res.data;
 }
 
-// just the file count, no Gemini call. the scan modal shows this while it is
-// still waiting, so the first step of the progress is a measured number.
-export async function countProjectFiles(projectPath: string): Promise<number> {
+export interface DetectedPort {
+  port: number;
+  source: string;
+}
+
+// reads the folder without calling Gemini, so the scan modal can confirm the
+// path is right and fill in the base url before anything is spent
+export async function probeProject(projectPath: string): Promise<{
+  filesScanned: number;
+  detectedPort: DetectedPort | null;
+}> {
   const res = await axios.post(`${BASE}/analyze/files`, { projectPath });
-  return res.data.filesScanned;
+  return { filesScanned: res.data.filesScanned, detectedPort: res.data.detectedPort ?? null };
 }
 
 // is the server we are about to call actually up? the proxy reports status 0

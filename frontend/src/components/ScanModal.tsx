@@ -11,30 +11,66 @@ import {
 import { colors } from "../theme/colors";
 import { radius, shadow } from "../theme/tokens";
 import Icon from "./Icon";
-
-export type ScanStage = "reading" | "analyzing" | null;
+import { probeProject, DetectedPort } from "../services/api";
 
 interface Props {
   visible: boolean;
   onClose: () => void;
-  onScan: (path: string) => void;
+  onScan: (path: string, baseUrl: string) => void;
   scanning: boolean;
   error?: string | null;
-  stage: ScanStage;
-  // how many route files the backend actually read, null until it says
-  filesFound: number | null;
 }
 
-export default function ScanModal({
-  visible,
-  onClose,
-  onScan,
-  scanning,
-  error,
-  stage,
-  filesFound,
-}: Props) {
+export default function ScanModal({ visible, onClose, onScan, scanning, error }: Props) {
   const [projectPath, setProjectPath] = React.useState("");
+  const [baseUrl, setBaseUrl] = React.useState("");
+  // set once the user edits the field, so a later probe cannot overwrite them
+  const [baseUrlTouched, setBaseUrlTouched] = React.useState(false);
+
+  const [filesFound, setFilesFound] = React.useState<number | null>(null);
+  const [detected, setDetected] = React.useState<DetectedPort | null>(null);
+  const [probing, setProbing] = React.useState(false);
+  const [probeError, setProbeError] = React.useState<string | null>(null);
+
+  // the path is read as it is typed rather than on submit, so the file count is
+  // feedback that the folder is right, and the port it finds fills the base url
+  // in before the user has to think about it
+  React.useEffect(() => {
+    const path = projectPath.trim();
+    if (!visible || !path) {
+      setFilesFound(null);
+      setDetected(null);
+      setProbeError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setProbing(true);
+    const id = setTimeout(async () => {
+      try {
+        const result = await probeProject(path);
+        if (cancelled) return;
+        setFilesFound(result.filesScanned);
+        setDetected(result.detectedPort);
+        setProbeError(null);
+        if (result.detectedPort && !baseUrlTouched) {
+          setBaseUrl(`http://localhost:${result.detectedPort.port}`);
+        }
+      } catch (err: any) {
+        if (cancelled) return;
+        setFilesFound(null);
+        setDetected(null);
+        setProbeError(err?.response?.data?.error || "could not read that folder");
+      } finally {
+        if (!cancelled) setProbing(false);
+      }
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [projectPath, visible, baseUrlTouched]);
 
   // a scan waits on Gemini, which can take a while. counting up is the honest
   // way to fill that gap: no invented percentage, just how long it has taken.
@@ -83,16 +119,38 @@ export default function ScanModal({
             editable={!scanning}
           />
 
+          {probing && <Text style={styles.probe}>reading folder...</Text>}
+          {!probing && probeError && <Text style={styles.probeBad}>{probeError}</Text>}
+          {!probing && filesFound !== null && (
+            <Text style={styles.probe}>
+              {filesFound} route file{filesFound === 1 ? "" : "s"} found
+            </Text>
+          )}
+
+          {/* required, because a scan that leaves this at a default points
+              every route it just found at the wrong server */}
+          <Text style={styles.label}>Base URL of the running server</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="http://localhost:3000"
+            placeholderTextColor={colors.textDim}
+            value={baseUrl}
+            onChangeText={(v) => {
+              setBaseUrlTouched(true);
+              setBaseUrl(v);
+            }}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!scanning}
+          />
+          {detected && !baseUrlTouched && (
+            <Text style={styles.probe}>port {detected.port} from {detected.source}</Text>
+          )}
+
           {scanning && (
             <View style={styles.progress}>
-              {step(
-                stage === "analyzing",
-                stage === "reading",
-                filesFound === null
-                  ? "Reading route files"
-                  : `Read ${filesFound} route file${filesFound === 1 ? "" : "s"}`
-              )}
-              {step(false, stage === "analyzing", "Extracting endpoints")}
+              {step(true, false, `Read ${filesFound ?? 0} route file${filesFound === 1 ? "" : "s"}`)}
+              {step(false, true, "Extracting endpoints")}
               <Text style={styles.elapsed}>{(elapsed / 1000).toFixed(1)}s</Text>
             </View>
           )}
@@ -110,9 +168,12 @@ export default function ScanModal({
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.scanBtn, scanning && styles.scanBtnDisabled]}
-              onPress={() => onScan(projectPath)}
-              disabled={scanning || !projectPath.trim()}
+              style={[
+                styles.scanBtn,
+                (scanning || !projectPath.trim() || !baseUrl.trim()) && styles.scanBtnDisabled,
+              ]}
+              onPress={() => onScan(projectPath.trim(), baseUrl.trim())}
+              disabled={scanning || !projectPath.trim() || !baseUrl.trim()}
             >
               <Text style={styles.scanText}>
                 {scanning ? "Scanning..." : "Scan"}
@@ -160,6 +221,27 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     marginBottom: 16,
     ...shadow.sm,
+  },
+  label: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: 6,
+  },
+  probe: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+    marginTop: -10,
+    marginBottom: 12,
+  },
+  probeBad: {
+    color: colors.statusErr,
+    fontSize: 11,
+    marginTop: -10,
+    marginBottom: 12,
   },
   progress: {
     backgroundColor: colors.surfaceLight,

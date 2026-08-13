@@ -99,12 +99,15 @@ npm install
 npm run web               # http://localhost:8081
 ```
 
-Set **Base URL** in the sidebar to whichever server you are testing, then hit
-Scan Project and give it a folder path.
+Hit **Scan Project** and give it a folder path. As you type it, ReqFlow reads
+the folder, tells you how many route files it found, and fills in the base url
+from the port the project declares, checking `.env`, then the package scripts,
+then the code, and saying which one it took it from. Confirm that and scan.
 
-One thing that trips people up: Base URL is your API, not ReqFlow. If you leave
-it pointing at port 4000 every route will 404, because 4000 is ReqFlow's own
-backend.
+The base url is required rather than defaulted, because a scan that leaves it
+at a guess points every route it just found at whatever happens to be running
+on that port. It is your API, not ReqFlow: port 4000 is ReqFlow's own backend,
+so pointing at it 404s everything.
 
 On web the frontend asks whatever host served the page for the API, so changing
 networks cannot break it. Running on a device is the one case that needs an
@@ -114,13 +117,13 @@ address written down, since `localhost` there is the phone: set `DEV_IP` in
 ## Tests
 
 ```bash
-cd backend && npm test     # 73
-cd frontend && npm test    # 32
+cd backend && npm test     # 81
+cd frontend && npm test    # 36
 ```
 
 The backend covers the proxy, the target guard, the analyze route and its cache,
-the Server-Timing parser, the OpenAPI builder, and the agent's tools including
-the action cap. They spin up their own throwaway server instead of calling a
+the Server-Timing parser, the OpenAPI builder, the port detector, and the
+agent's tools including the action cap. They spin up their own throwaway server instead of calling a
 public API, and Gemini is mocked, so they run offline and cost nothing.
 
 The frontend suite is limited to `src/lib`: variables, query parameters and the
@@ -132,7 +135,8 @@ files do not justify yet.
 ```
 backend/
   routes/      analyze, proxy, ai-chat
-  services/    fileReader, gemini, openapi, proxy, serverTiming, targetGuard
+  services/    fileReader, gemini, openapi, portDetector, proxy, serverTiming,
+               targetGuard
 frontend/
   components/  sidebar, tabs, request builder, response viewer, trace, agent
   lib/         assertions, persistence, variables, query params, timings

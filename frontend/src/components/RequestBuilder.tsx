@@ -44,6 +44,9 @@ interface Props {
   loading: boolean;
   response: any;
   timingNote?: { text: string; slower: boolean } | null;
+  // used only to word the empty state: whether a scan has happened yet
+  routeCount: number;
+  onScanPress: () => void;
 }
 
 export default function RequestBuilder({
@@ -61,6 +64,8 @@ export default function RequestBuilder({
   loading,
   response,
   timingNote,
+  routeCount,
+  onScanPress,
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
@@ -118,6 +123,9 @@ export default function RequestBuilder({
     setTimeout(() => setCurlCopied(false), 1600);
   };
 
+  // pressing Send on an empty url used to do nothing at all, with no hint that
+  // anything was missing, which reads as the app being broken
+  const canSend = url.trim().length > 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
   const ok = response && response.status < 400;
@@ -165,11 +173,11 @@ export default function RequestBuilder({
         <Pressable
           style={({ pressed }: any) => [
             styles.sendBtnWrap,
-            loading && styles.sendBtnDisabled,
+            (loading || !canSend) && styles.sendBtnDisabled,
             pressed && styles.sendBtnPressed,
           ]}
           onPress={onSend}
-          disabled={loading}
+          disabled={loading || !canSend}
         >
           <LinearGradient
             colors={[colors.accent, colors.accentLight]}
@@ -219,6 +227,29 @@ export default function RequestBuilder({
         </View>
       )}
 
+      {/* nothing has been typed and nothing has been scanned, so the editors
+          below are asking about a request that does not exist yet. say what to
+          do instead of showing an empty body field. */}
+      {!canSend && routeCount === 0 ? (
+        <View style={styles.blank}>
+          <Text style={styles.blankTitle}>Nothing to send yet</Text>
+          <Text style={styles.blankBody}>
+            Scan a project and ReqFlow will list its routes in the sidebar, ready
+            to open in a tab. Or type a URL above and press Send.
+          </Text>
+          <Pressable
+            style={({ hovered }: any) => [styles.blankBtn, hovered && styles.blankBtnHover]}
+            onPress={onScanPress}
+          >
+            <Text style={styles.blankBtnText}>Scan Project</Text>
+          </Pressable>
+          <Text style={styles.blankAside}>
+            The agent on the right can also run them for you once there is a
+            project to point it at.
+          </Text>
+        </View>
+      ) : (
+      <>
       {/* sub tabs */}
       <SubTabs
         activeSubTab={activeSubTab}
@@ -249,7 +280,11 @@ export default function RequestBuilder({
               )}
               <View style={{ flex: 1 }} />
               <Text style={styles.hint}>
-                {Platform.OS === "web" ? "Ctrl+Enter to send" : ""}
+                {!canSend
+                  ? "enter a URL to send"
+                  : Platform.OS === "web"
+                  ? "Ctrl+Enter to send"
+                  : ""}
               </Text>
             </View>
             <TextInput
@@ -307,6 +342,8 @@ export default function RequestBuilder({
       </View>
 
       <ResponseViewer response={response} loading={loading} timingNote={timingNote} />
+      </>
+      )}
     </View>
   );
 }
@@ -451,6 +488,51 @@ const styles = StyleSheet.create({
   },
   subContent: {
     minHeight: 100,
+  },
+  blank: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 40,
+    paddingBottom: 60,
+  },
+  blankTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "500",
+    marginBottom: 8,
+  },
+  blankBody: {
+    color: colors.textDim,
+    fontSize: 13,
+    lineHeight: 20,
+    textAlign: "center",
+    maxWidth: 420,
+    marginBottom: 18,
+  },
+  blankBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...transition("background-color"),
+  },
+  blankBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  blankBtnText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  blankAside: {
+    color: colors.textDim,
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    maxWidth: 380,
+    marginTop: 22,
   },
   bodySection: {
     padding: 12,

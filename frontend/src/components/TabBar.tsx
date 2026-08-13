@@ -17,6 +17,13 @@ interface Props {
   runSummary: { passed: number; failed: number; errors: number; sent: number } | null;
 }
 
+// a run of nested routes gives every tab a label ending in the same 24 hex
+// characters, and the row truncates at the end, so they all read alike. the id
+// is what makes them different, so keep both ends of it.
+function shortenIds(label: string): string {
+  return label.replace(/\b([0-9a-f]{8})[0-9a-f]{8,}([0-9a-f]{4})\b/gi, "$1…$2");
+}
+
 export default function TabBar({
   tabs,
   activeTabId,
@@ -28,6 +35,7 @@ export default function TabBar({
   runProgress,
   runSummary,
 }: Props) {
+  const runnable = tabs.filter((t) => t.url.trim()).length;
   const scrollRef = React.useRef<ScrollView>(null);
   const layouts = React.useRef<Record<string, { x: number; width: number }>>({});
   const scrollX = React.useRef(0);
@@ -115,7 +123,7 @@ export default function TabBar({
                   style={[styles.tabLabel, active && styles.tabLabelActive]}
                   numberOfLines={1}
                 >
-                  {tab.label || "New Request"}
+                  {shortenIds(tab.label || "New Request")}
                 </Text>
                 <TouchableOpacity
                   style={styles.closeBtn}
@@ -142,39 +150,44 @@ export default function TabBar({
       {/* the agent opens a tab per request, so a few runs leave a row nobody
           wants to close one at a time. pinned outside the scroller so it does
           not drift off with the tabs. */}
-      {runSummary && !runProgress && (
-        <Text style={styles.runSummary}>
-          {/* with no assertions anywhere, "0 passed" reads as a failure. say
-              what actually happened instead. */}
-          {runSummary.passed + runSummary.failed === 0 ? (
-            <Text>
-              {runSummary.sent} sent, no assertions
+      {/* nothing to run means the button did nothing when pressed, with no
+          explanation. it stays out of the way until there is. the result goes
+          on the button too, rather than as a second thing competing for the
+          same strip. */}
+      {(runnable > 0 || runProgress) && (
+        <Pressable
+          style={({ hovered }: any) => [
+            styles.closeOthers,
+            hovered && styles.closeOthersHover,
+            !!runProgress && styles.runningBtn,
+          ]}
+          onPress={onRunAll}
+          disabled={!!runProgress}
+        >
+          {runProgress ? (
+            <Text style={styles.closeOthersText}>
+              running {runProgress.done}/{runProgress.total}
+            </Text>
+          ) : runSummary ? (
+            <Text style={styles.closeOthersText}>
+              {/* with no assertions anywhere, "0 passed" reads as a failure */}
+              {runSummary.passed + runSummary.failed === 0 ? (
+                <Text>{runSummary.sent} sent, no assertions</Text>
+              ) : (
+                <>
+                  <Text style={{ color: colors.statusOk }}>{runSummary.passed} passed</Text>
+                  {runSummary.failed > 0 && (
+                    <Text style={{ color: colors.statusErr }}> · {runSummary.failed} failed</Text>
+                  )}
+                </>
+              )}
+              {runSummary.errors > 0 && <Text> · {runSummary.errors} not sent</Text>}
             </Text>
           ) : (
-            <>
-              <Text style={{ color: colors.statusOk }}>{runSummary.passed} passed</Text>
-              {runSummary.failed > 0 && (
-                <Text style={{ color: colors.statusErr }}> · {runSummary.failed} failed</Text>
-              )}
-            </>
+            <Text style={styles.closeOthersText}>run all ({runnable})</Text>
           )}
-          {runSummary.errors > 0 && <Text> · {runSummary.errors} not sent</Text>}
-        </Text>
+        </Pressable>
       )}
-
-      <Pressable
-        style={({ hovered }: any) => [
-          styles.closeOthers,
-          hovered && styles.closeOthersHover,
-          !!runProgress && styles.runningBtn,
-        ]}
-        onPress={onRunAll}
-        disabled={!!runProgress}
-      >
-        <Text style={styles.closeOthersText}>
-          {runProgress ? `running ${runProgress.done}/${runProgress.total}` : "run all"}
-        </Text>
-      </Pressable>
 
       {tabs.length > 2 && (
         <Pressable
@@ -216,12 +229,6 @@ const styles = StyleSheet.create({
   },
   runningBtn: {
     borderColor: colors.accent,
-  },
-  runSummary: {
-    fontSize: 10,
-    fontFamily: "monospace",
-    color: colors.textDim,
-    marginLeft: 8,
   },
   closeOthersText: {
     color: colors.textDim,

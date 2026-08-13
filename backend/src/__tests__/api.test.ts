@@ -49,6 +49,10 @@ beforeAll(async () => {
   target.use(express.json());
   target.get("/thing", (req, res) => res.json({ name: "widget", id: 7 }));
   target.post("/echo", (req, res) => res.status(201).json({ received: req.body }));
+  // a local server that bounces the caller somewhere else. the first is the
+  // relay the target guard exists to stop, the second must keep working.
+  target.get("/redirect-out", (req, res) => res.redirect(302, "http://example.com/"));
+  target.get("/redirect-in", (req, res) => res.redirect(302, `${upstreamUrl}/thing`));
   target.get("/traced", (req, res) => {
     res.set(
       "Server-Timing",
@@ -124,6 +128,26 @@ describe("POST /api/proxy", () => {
     const res = await request(app).post("/api/proxy").send({ method: "GET" });
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/required/i);
+  });
+
+  it("refuses a redirect that would leave the private network", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/redirect-out` });
+
+    // the guard only ever saw a local url, so the hop is where it has to bite
+    expect(res.body.status).toBe(0);
+    expect(JSON.stringify(res.body.data)).toMatch(/only local and private/i);
+    expect(JSON.stringify(res.body.data)).toMatch(/example\.com/);
+  });
+
+  it("still follows a redirect that stays local", async () => {
+    const res = await request(app)
+      .post("/api/proxy")
+      .send({ method: "GET", url: `${upstreamUrl}/redirect-in` });
+
+    expect(res.body.status).toBe(200);
+    expect(res.body.data).toEqual({ name: "widget", id: 7 });
   });
 
   it("forwards a GET request and reports timing", async () => {

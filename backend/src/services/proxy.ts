@@ -38,6 +38,15 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
       timeout: 30000,
       responseType: "stream",
       validateStatus: () => true, // don't throw on 4xx/5xx
+      // the check above only sees the url we were handed. without this a local
+      // server could 302 us straight back out to a public address, which is the
+      // same relay the guard exists to prevent.
+      beforeRedirect: (options: any) => {
+        const next = options.href || `${options.protocol}//${options.host}${options.path}`;
+        if (!isPrivateTarget(next)) {
+          throw new Error(`redirect to ${next} refused: ${TARGET_BLOCKED_MESSAGE}`);
+        }
+      },
     });
 
     const ttfb = Date.now() - start;

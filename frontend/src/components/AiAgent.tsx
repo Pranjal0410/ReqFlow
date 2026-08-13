@@ -11,22 +11,75 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
-import { DetectedRoute } from "../types";
+import { DetectedRoute, ApiResponse } from "../types";
 import { CONFIG } from "../config";
 import Icon from "./Icon";
+import JsonView from "./JsonView";
 
-interface TraceEntry {
+// the agent acts without asking, so this log is how the user knows what it did.
+// sent and drafted stay distinguishable: a drafted tab went nowhere.
+type ActionLogEntry =
+  | {
+      kind: "request";
+      method: string;
+      url: string;
+      status: number | null;
+      refused: boolean;
+      requestHeaders?: Record<string, string>;
+      requestBody?: string;
+      response?: ApiResponse & { truncated?: boolean };
+    }
+  | { kind: "draft"; method: string; url: string }
+  | { kind: "assertions"; count: number }
+  | { kind: "variable"; name: string };
+
+// a request the agent already ran. it goes straight into a tab so the response
+// lands in the full width viewer, instead of being readable only in the chat
+// column the agent happens to live in.
+export interface AgentSentRequest {
   method: string;
   url: string;
-  status: number | null;
-  refused: boolean;
+  headers: Record<string, string>;
+  body: string;
+  response: ApiResponse;
 }
 
 interface Message {
   id: string;
   role: "assistant" | "user";
   content: string;
-  trace?: TraceEntry[];
+  trace?: ActionLogEntry[];
+}
+
+export interface AgentRequestDraft {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+  label: string;
+}
+
+export interface AgentAssertion {
+  field: string;
+  operator: string;
+  value: string;
+}
+
+// what the user is actually looking at. without it the agent cannot answer
+// "why is this failing", the most obvious question there is, because it has
+// never seen the request or the response on screen.
+export interface ActiveTabContext {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: string;
+  response: {
+    status: number;
+    statusText: string;
+    timing: number;
+    data: string;
+  } | null;
+  tests: { field: string; operator: string; value: string; passed: boolean | null }[];
 }
 
 interface Props {
@@ -35,20 +88,43 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   baseUrl: string;
+  activeTab: ActiveTabContext;
+  onCreateRequest: (draft: AgentRequestDraft) => void;
+  onCreateAssertions: (assertions: AgentAssertion[]) => void;
+  onAgentRequests: (sent: AgentSentRequest[]) => void;
+  onSetVariable: (name: string, value: string) => void;
+  variables: Record<string, string>;
 }
 
-export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
+export default function AiAgent({
+  routes,
+  visible,
+  onClose,
+  baseUrl,
+  activeTab,
+  onCreateRequest,
+  onCreateAssertions,
+  onAgentRequests,
+  onSetVariable,
+  variables,
+}: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "I can send real requests to the API you are pointed at, so ask me to:\n\n• test endpoints, one or all of them\n• explain what an endpoint does\n• debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine.\n\nOne limit worth knowing: I can describe a request or an assertion, but I cannot put it into your tabs for you.",
+        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Two limits: I can only reach localhost and private network addresses, and I get 15 actions per conversation.",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [allowWrites, setAllowWrites] = useState(false);
+  // autonomous by default. read-only is here for when you want it, not the
+  // starting position.
+  const [allowWrites, setAllowWrites] = useState(true);
+  const [actionsUsed, setActionsUsed] = useState(0);
+  const [actionLimit, setActionLimit] = useState(15);
+  // which response in the log is open. one at a time keeps the panel readable.
+  const [expanded, setExpanded] = useState<string | null>(null);
   const scrollRef = React.useRef<ScrollView>(null);
 
   if (!visible) return null;
@@ -82,6 +158,9 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
           routeContext,
           baseUrl,
           allowWrites,
+          actionsUsed,
+          activeTab,
+          variables,
           history: messages.slice(-6).map((m) => ({
             role: m.role,
             content: m.content,
@@ -90,6 +169,41 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
       });
 
       const data = await res.json();
+
+      // everything the agent sent becomes a tab with its response already in
+      // it. this runs before the ui actions so that assertions asked for in the
+      // same breath land on the tab the user is now looking at.
+      const sent: AgentSentRequest[] = (data.trace || [])
+        .filter((t: ActionLogEntry) => t.kind === "request" && t.response)
+        .map((t: any) => ({
+          method: t.method,
+          url: t.url,
+          headers: t.requestHeaders || {},
+          body: t.requestBody || "",
+          response: t.response,
+        }));
+      if (sent.length) onAgentRequests(sent);
+
+      // the agent decided on these, but only the app can carry them out. apply
+      // them before the reply lands so the message and the tabs agree.
+      for (const action of data.uiActions || []) {
+        if (action.type === "create_request") {
+          onCreateRequest({
+            method: action.method,
+            url: action.url,
+            headers: action.headers || {},
+            body: action.body || "",
+            label: action.label,
+          });
+        } else if (action.type === "create_assertions") {
+          onCreateAssertions(action.assertions);
+        } else if (action.type === "set_variable") {
+          onSetVariable(action.name, action.value);
+        }
+      }
+
+      if (typeof data.actionsUsed === "number") setActionsUsed(data.actionsUsed);
+      if (typeof data.actionLimit === "number") setActionLimit(data.actionLimit);
 
       const aiMsg: Message = {
         id: (Date.now() + 1).toString(),
@@ -114,33 +228,113 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
     }
   };
 
-  const renderTrace = (trace?: TraceEntry[]) => {
+  const path = (url: string) => url.replace(/^https?:\/\/[^/]+/, "");
+
+
+  const renderTrace = (msgId: string, trace?: ActionLogEntry[]) => {
     if (!trace || trace.length === 0) return null;
     return (
       <View style={styles.trace}>
         <Text style={styles.traceTitle}>
-          {trace.length} request{trace.length === 1 ? "" : "s"} sent
+          {trace.length} action{trace.length === 1 ? "" : "s"}
         </Text>
-        {trace.map((t, i) => (
-          <Text key={i} style={styles.traceLine} numberOfLines={1}>
-            <Text style={styles.traceMethod}>{t.method}</Text>{" "}
-            {t.url.replace(/^https?:\/\/[^/]+/, "")}{" "}
-            <Text
-              style={{
-                color: t.refused
-                  ? colors.textDim
-                  : (t.status ?? 0) < 400
-                  ? colors.statusOk
-                  : colors.statusErr,
-              }}
-            >
-              {t.refused ? "blocked" : t.status}
-            </Text>
-          </Text>
-        ))}
+        {trace.map((t, i) => {
+          if (t.kind === "request") {
+            const key = `${msgId}:${i}`;
+            const open = expanded === key;
+            // this response is already open in a tab. the inline peek is for
+            // glancing back at an earlier action without hunting for its tab.
+            const canOpen = !!t.response && t.response.data !== null;
+            const ms = t.response?.timing.total;
+
+            return (
+              <View key={i}>
+                <Pressable
+                  onPress={() => canOpen && setExpanded(open ? null : key)}
+                  style={({ hovered }: any) => [
+                    styles.traceRow,
+                    canOpen && hovered && styles.traceRowHover,
+                  ]}
+                >
+                  {canOpen ? (
+                    <Icon
+                      name={open ? "chevronDown" : "chevronRight"}
+                      size={11}
+                      color={colors.textDim}
+                    />
+                  ) : (
+                    <View style={styles.traceGutter} />
+                  )}
+                  <Text style={styles.traceLine} numberOfLines={1}>
+                    <Text style={styles.traceMethod}>{t.method}</Text> {path(t.url)}{" "}
+                    <Text
+                      style={{
+                        color: t.refused
+                          ? colors.textDim
+                          : (t.status ?? 0) < 400
+                          ? colors.statusOk
+                          : colors.statusErr,
+                      }}
+                    >
+                      {t.refused ? "blocked" : t.status}
+                    </Text>
+                    {ms !== undefined && (
+                      <Text style={{ color: colors.textDim }}> {ms}ms</Text>
+                    )}
+                  </Text>
+                </Pressable>
+                {open && t.response && (
+                  <ScrollView style={styles.traceBody} nestedScrollEnabled>
+                    <JsonView data={t.response.data} />
+                  </ScrollView>
+                )}
+              </View>
+            );
+          }
+          if (t.kind === "draft") {
+            return (
+              <View key={i} style={styles.traceRow}>
+                <View style={styles.traceGutter} />
+                <Text style={styles.traceLine} numberOfLines={1}>
+                  <Text style={styles.traceVerb}>drafted</Text>{" "}
+                  <Text style={styles.traceMethod}>{t.method}</Text> {path(t.url)}{" "}
+                  <Text style={{ color: colors.textDim }}>not sent</Text>
+                </Text>
+              </View>
+            );
+          }
+          if (t.kind === "assertions") {
+            return (
+              <View key={i} style={styles.traceRow}>
+                <View style={styles.traceGutter} />
+                <Text style={styles.traceLine} numberOfLines={1}>
+                  <Text style={styles.traceVerb}>added</Text> {t.count} assertion
+                  {t.count === 1 ? "" : "s"}
+                </Text>
+              </View>
+            );
+          }
+          return (
+            <View key={i} style={styles.traceRow}>
+              <View style={styles.traceGutter} />
+              <Text style={styles.traceLine} numberOfLines={1}>
+                <Text style={styles.traceVerb}>set</Text> {`{{${t.name}}}`}
+              </Text>
+            </View>
+          );
+        })}
       </View>
     );
   };
+
+  const clearChat = () => {
+    // the action budget is per conversation, so clearing is also how you get a
+    // fresh one after hitting the cap
+    setMessages((prev) => prev.slice(0, 1));
+    setActionsUsed(0);
+  };
+
+  const remaining = actionLimit - actionsUsed;
 
   return (
     <View style={styles.container}>
@@ -161,6 +355,14 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
             {allowWrites ? "writes on" : "read only"}
           </Text>
         </Pressable>
+        {messages.length > 1 && (
+          <Pressable
+            style={({ hovered }: any) => [styles.writeToggle, hovered && styles.writeToggleHover]}
+            onPress={clearChat}
+          >
+            <Text style={styles.writeToggleText}>clear</Text>
+          </Pressable>
+        )}
         <Pressable
           style={({ hovered }: any) => [styles.closeWrap, hovered && styles.closeWrapHover]}
           onPress={onClose}
@@ -189,7 +391,7 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
               style={[styles.msgBubble, styles.aiMsg]}
             >
               <Text style={styles.msgText}>{msg.content}</Text>
-              {renderTrace(msg.trace)}
+              {renderTrace(msg.id, msg.trace)}
             </LinearGradient>
           )
         )}
@@ -199,6 +401,17 @@ export default function AiAgent({ routes, visible, onClose, baseUrl }: Props) {
           </View>
         )}
       </ScrollView>
+
+      {/* the cap is invisible until it starts to matter */}
+      {actionsUsed > 0 && (
+        <View style={styles.budget}>
+          <Text style={[styles.budgetText, remaining === 0 && styles.budgetTextOut]}>
+            {remaining === 0
+              ? `${actionLimit} action limit reached — clear the chat for a fresh budget`
+              : `${actionsUsed} of ${actionLimit} actions used`}
+          </Text>
+        </View>
+      )}
 
       {/* input */}
       <View style={styles.inputRow}>
@@ -345,6 +558,44 @@ const styles = StyleSheet.create({
   },
   traceMethod: {
     color: colors.text,
+  },
+  traceVerb: {
+    color: colors.textDim,
+  },
+  traceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  traceRowHover: {
+    backgroundColor: colors.hover,
+  },
+  // keeps lines with no response to open aligned with the ones that have a chevron
+  traceGutter: {
+    width: 11,
+  },
+  traceBody: {
+    maxHeight: 220,
+    marginTop: 4,
+    marginBottom: 6,
+    marginLeft: 15,
+    padding: 8,
+    backgroundColor: colors.bg,
+    borderRadius: radius.sm,
+  },
+  budget: {
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  budgetText: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontFamily: "monospace",
+  },
+  budgetTextOut: {
+    color: colors.statusErr,
   },
   inputRow: {
     flexDirection: "row",

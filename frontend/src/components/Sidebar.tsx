@@ -11,6 +11,8 @@ import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
 import { DetectedRoute, HistoryEntry } from "../types";
+import { Variable, isSecretVariable } from "../lib/variables";
+import * as Clipboard from "expo-clipboard";
 
 interface Props {
   routes: DetectedRoute[];
@@ -22,6 +24,9 @@ interface Props {
   history: HistoryEntry[];
   onSelectHistory: (entry: HistoryEntry) => void;
   onReset: () => void;
+  variables: Variable[];
+  onVariablesChange: (vars: Variable[]) => void;
+  onExportOpenApi: () => Promise<string>;
 }
 
 export default function Sidebar({
@@ -34,11 +39,26 @@ export default function Sidebar({
   history,
   onSelectHistory,
   onReset,
+  variables,
+  onVariablesChange,
+  onExportOpenApi,
 }: Props) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [confirmReset, setConfirmReset] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [activePath, setActivePath] = React.useState<string | null>(null);
+  const [showVars, setShowVars] = React.useState(false);
+  const [specCopied, setSpecCopied] = React.useState<string | null>(null);
+
+  const copySpec = async () => {
+    try {
+      await Clipboard.setStringAsync(await onExportOpenApi());
+      setSpecCopied("Copied OpenAPI JSON");
+    } catch (err: any) {
+      setSpecCopied(err?.response?.data?.error || "Export failed");
+    }
+    setTimeout(() => setSpecCopied(null), 2200);
+  };
 
   const filtered = routes.filter(
     (r) =>
@@ -103,6 +123,68 @@ export default function Sidebar({
         autoCapitalize="none"
         autoCorrect={false}
       />
+
+      {/* {{name}} placeholders, resolved on every send. the agent writes the
+          token in here after a login so each tab stops needing its own. */}
+      <Pressable style={styles.varsHeader} onPress={() => setShowVars(!showVars)}>
+        <Icon name={showVars ? "chevronDown" : "chevronRight"} size={12} color={colors.textDim} />
+        <Text style={styles.fieldLabel}>Variables</Text>
+        {variables.length > 0 && <Text style={styles.groupCount}>{variables.length}</Text>}
+      </Pressable>
+
+      {showVars && (
+        <View style={styles.varsBox}>
+          {variables.map((v, i) => (
+            <View key={i} style={styles.varRow}>
+              <TextInput
+                style={[styles.varInput, styles.varKey]}
+                placeholder="name"
+                placeholderTextColor={colors.textDim}
+                value={v.key}
+                onChangeText={(key) =>
+                  onVariablesChange(variables.map((x, j) => (j === i ? { ...x, key } : x)))
+                }
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={styles.varInput}
+                placeholder="value"
+                placeholderTextColor={colors.textDim}
+                value={v.value}
+                onChangeText={(value) =>
+                  onVariablesChange(variables.map((x, j) => (j === i ? { ...x, value } : x)))
+                }
+                autoCapitalize="none"
+                autoCorrect={false}
+                secureTextEntry={isSecretVariable(v.key)}
+              />
+              <Pressable
+                style={styles.varRemove}
+                onPress={() => onVariablesChange(variables.filter((_, j) => j !== i))}
+              >
+                <Icon name="close" size={12} color={colors.textDim} />
+              </Pressable>
+            </View>
+          ))}
+          <Pressable
+            style={({ hovered: h }: any) => [styles.varAdd, h && styles.varAddHover]}
+            onPress={() => onVariablesChange([...variables, { key: "", value: "" }])}
+          >
+            <Text style={styles.varAddText}>+ Add variable</Text>
+          </Pressable>
+          <Text style={styles.varsHint}>use as {"{{name}}"} in a url, header or body</Text>
+        </View>
+      )}
+
+      {routes.length > 0 && (
+        <Pressable
+          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+          onPress={copySpec}
+        >
+          <Text style={styles.exportText}>{specCopied || "Copy as OpenAPI"}</Text>
+        </Pressable>
+      )}
 
       <TextInput
         style={styles.search}
@@ -302,6 +384,77 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     marginBottom: 12,
     ...shadow.sm,
+  },
+  exportBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 9,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignSelf: "flex-start",
+    marginBottom: 12,
+    ...transition("background-color"),
+  },
+  exportBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  exportText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  varsHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginBottom: 6,
+  },
+  varsBox: {
+    marginBottom: 12,
+  },
+  varRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: 4,
+  },
+  varInput: {
+    flex: 1,
+    backgroundColor: colors.surfaceLight,
+    color: colors.text,
+    borderRadius: radius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    fontSize: 11,
+    fontFamily: "monospace",
+  },
+  varKey: {
+    flex: 0.7,
+  },
+  varRemove: {
+    padding: 3,
+    borderRadius: radius.sm,
+  },
+  varAdd: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: radius.sm,
+    alignSelf: "flex-start",
+    ...transition("background-color"),
+  },
+  varAddHover: {
+    backgroundColor: colors.hover,
+  },
+  varAddText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  varsHint: {
+    color: colors.textDim,
+    fontSize: 10,
+    marginTop: 4,
+    fontFamily: "monospace",
   },
   search: {
     backgroundColor: colors.surfaceLight,

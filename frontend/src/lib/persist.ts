@@ -2,6 +2,8 @@ import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import { DetectedRoute, RequestTab, HistoryEntry } from "../types";
+import { Variable, isSecretVariable } from "./variables";
+import { TimingHistory } from "./timings";
 
 const KEY = "reqflow.workspace.v1";
 const SECRETS_KEY = "reqflow.secrets.v1";
@@ -24,6 +26,8 @@ export interface Workspace {
   tabs: RequestTab[];
   activeTabId: string;
   history: HistoryEntry[];
+  variables: Variable[];
+  timings: TimingHistory;
 }
 
 // tabId -> headerName -> value
@@ -90,6 +94,29 @@ function stripForStorage(tabs: RequestTab[]): { tabs: RequestTab[]; secrets: Sec
   return { tabs: cleaned, secrets };
 }
 
+// variables share the secrets store with headers. a tab id can never collide
+// with this because ids are generated from Date.now().
+const VAR_SCOPE = "__variables__";
+
+function stripVarsForStorage(vars: Variable[]): { vars: Variable[]; secret: Record<string, string> } {
+  const secret: Record<string, string> = {};
+  const cleaned = vars.map((v) => {
+    if (v.key.trim() && isSecretVariable(v.key) && v.value) {
+      secret[v.key] = v.value;
+      // the name stays visible so you can see the variable exists
+      return { ...v, value: "" };
+    }
+    return v;
+  });
+  return { vars: cleaned, secret };
+}
+
+function restoreVars(vars: Variable[], secrets: Secrets): Variable[] {
+  const held = secrets[VAR_SCOPE];
+  if (!held) return vars;
+  return vars.map((v) => (held[v.key] ? { ...v, value: held[v.key] } : v));
+}
+
 function restoreSecrets(tabs: RequestTab[], secrets: Secrets): RequestTab[] {
   return tabs.map((tab) => {
     const forTab = secrets[tab.id];
@@ -105,8 +132,10 @@ function restoreSecrets(tabs: RequestTab[], secrets: Secrets): RequestTab[] {
 
 export async function saveWorkspace(ws: Workspace): Promise<void> {
   const { tabs, secrets } = stripForStorage(ws.tabs);
+  const { vars, secret } = stripVarsForStorage(ws.variables || []);
+  if (Object.keys(secret).length) secrets[VAR_SCOPE] = secret;
   try {
-    await AsyncStorage.setItem(KEY, JSON.stringify({ ...ws, tabs }));
+    await AsyncStorage.setItem(KEY, JSON.stringify({ ...ws, tabs, variables: vars }));
     await writeSecrets(secrets);
   } catch {
     // same reasoning as above, a failed save must not take the app down
@@ -143,6 +172,9 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     tabs,
     activeTabId,
     history: Array.isArray(parsed.history) ? parsed.history : [],
+    variables: restoreVars(Array.isArray(parsed.variables) ? parsed.variables : [], secrets),
+    // measurements, not credentials, so they ride along in the workspace blob
+    timings: parsed.timings && typeof parsed.timings === "object" ? parsed.timings : {},
   };
 }
 

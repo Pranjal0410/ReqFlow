@@ -45,3 +45,30 @@ describe("isPrivateTarget", () => {
     expect(isPrivateTarget("http://")).toBe(false);
   });
 });
+
+// "localhost:3001" is how the address is normally written, and URL reads
+// localhost: as the scheme, so the guard used to refuse it as a public host
+describe("isPrivateTarget without a scheme", () => {
+  it("lets an ordinary local address through", () => {
+    expect(isPrivateTarget("localhost:3001/api")).toBe(true);
+    expect(isPrivateTarget("127.0.0.1:4000")).toBe(true);
+    expect(isPrivateTarget("192.168.1.5:3000/x")).toBe(true);
+  });
+
+  it("still refuses a public host written the same way", () => {
+    expect(isPrivateTarget("example.com")).toBe(false);
+    expect(isPrivateTarget("api.github.com/users")).toBe(false);
+    expect(isPrivateTarget("8.8.8.8:80")).toBe(false);
+  });
+
+  it("is not fooled by a hostname that only looks private", () => {
+    expect(isPrivateTarget("192.168.evil.com")).toBe(false);
+    expect(isPrivateTarget("localhost.evil.com")).toBe(false);
+    expect(isPrivateTarget("127.0.0.1.evil.com")).toBe(false);
+  });
+
+  it("keeps refusing a scheme that is not http", () => {
+    expect(isPrivateTarget("file:///etc/passwd")).toBe(false);
+    expect(isPrivateTarget("ftp://localhost:21")).toBe(false);
+  });
+});

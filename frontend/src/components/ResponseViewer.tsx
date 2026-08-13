@@ -48,7 +48,13 @@ export default function ResponseViewer({ response, loading, timingNote }: Props)
     );
   }
 
-  const ok = response.status < 400;
+  // status 0 is the proxy saying it never got a reply. it is less than 400, so
+  // a refused connection used to be painted with the success colour.
+  const ok = response.status >= 200 && response.status < 400;
+
+  // a connection error puts its whole message in statusText, which then crowds
+  // the timing and size out of the row. the body still has it in full.
+  const statusLabel = `${response.status} ${response.statusText || ""}`.trim();
   const headerEntries = Object.entries(response.headers || {});
 
   const copy = async () => {
@@ -83,7 +89,7 @@ export default function ResponseViewer({ response, loading, timingNote }: Props)
               { color: ok ? colors.statusOk : colors.statusErr },
             ]}
           >
-            {response.status} {response.statusText}
+            {statusLabel.length > 46 ? statusLabel.slice(0, 46) + "…" : statusLabel}
           </Text>
         </View>
 

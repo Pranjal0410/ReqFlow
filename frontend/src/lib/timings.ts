@@ -1,4 +1,5 @@
 import { ApiResponse } from "../types";
+import { pathOf } from "./url";
 
 // every send is already measured. keeping a few of those measurements per
 // endpoint is what turns "826 ms" into "826 ms, and it used to be 140".
@@ -36,19 +37,7 @@ function sameKind(a: number, b: number): boolean {
 }
 
 export function endpointKey(method: string, url: string): string {
-  // "localhost:3001/x" does not throw: URL reads localhost: as the protocol and
-  // hands back "3001/x" as the path. checking the protocol is what separates a
-  // real url from a half typed one.
-  let path = url.split("?")[0];
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-      path = parsed.pathname;
-    }
-  } catch {
-    // keep the split fallback
-  }
-  return `${method.toUpperCase()} ${path}`;
+  return `${method.toUpperCase()} ${pathOf(url)}`;
 }
 
 export function sampleFrom(response: ApiResponse): TimingSample {

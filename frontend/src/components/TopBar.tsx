@@ -13,7 +13,10 @@ interface Props {
 }
 
 export default function TopBar({ projectName, routeCount, target, targetUp }: Props) {
-  const host = target ? target.replace(/^https?:\/\//, "") : null;
+  // only http is dropped. leaving https visible is what tells you the tab is
+  // asking for a scheme the server does not speak, which otherwise looks
+  // identical to the address that works.
+  const host = target ? target.replace(/^http:\/\//, "") : null;
 
   const state = !host
     ? { color: colors.textDim, tint: "rgba(255,255,255,0.06)", label: "No target" }

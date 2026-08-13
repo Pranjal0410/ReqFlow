@@ -63,3 +63,30 @@ describe("urlWithParams", () => {
     );
   });
 });
+
+// the url is the only place a query parameter lives, so a row has to survive a
+// write followed by a read. it used to disappear the moment it was switched
+// off, which is why the params editor has no toggle.
+describe("round trip", () => {
+  it("returns the same rows after writing and reading again", () => {
+    const url = "http://x/y?status=open&limit=5";
+    const rows = paramsFromUrl(url);
+    expect(paramsFromUrl(urlWithParams(url, rows))).toEqual(rows);
+  });
+
+  it("every row it reads back is enabled, so none can be lost", () => {
+    const rows = paramsFromUrl("http://x/y?a=1&b=2");
+    expect(rows.every((r) => r.enabled)).toBe(true);
+  });
+
+  it("keeps values that need encoding through a round trip", () => {
+    const url = urlWithParams("http://x/y", [
+      { key: "q", value: "a b&c", enabled: true },
+      { key: "t", value: "{{token}}", enabled: true },
+    ]);
+    expect(paramsFromUrl(url)).toEqual([
+      { key: "q", value: "a b&c", enabled: true },
+      { key: "t", value: "{{token}}", enabled: true },
+    ]);
+  });
+});

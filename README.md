@@ -117,8 +117,8 @@ address written down, since `localhost` there is the phone: set `DEV_IP` in
 ## Tests
 
 ```bash
-cd backend && npm test     # 81
-cd frontend && npm test    # 36
+cd backend && npm test     # 85
+cd frontend && npm test    # 45
 ```
 
 The backend covers the proxy, the target guard, the analyze route and its cache,
@@ -126,8 +126,8 @@ the Server-Timing parser, the OpenAPI builder, the port detector, and the
 agent's tools including the action cap. They spin up their own throwaway server instead of calling a
 public API, and Gemini is mocked, so they run offline and cost nothing.
 
-The frontend suite is limited to `src/lib`: variables, query parameters and the
-timing comparison. Components would need a react-native renderer, which those
+The frontend suite is limited to `src/lib`: variables, query parameters, url
+normalisation and the timing comparison. Components would need a react-native renderer, which those
 files do not justify yet.
 
 ## How it is put together
@@ -139,7 +139,7 @@ backend/
                targetGuard
 frontend/
   components/  sidebar, tabs, request builder, response viewer, trace, agent
-  lib/         assertions, persistence, variables, query params, timings
+  lib/         assertions, persistence, url, variables, query params, timings
 ```
 
 Requests go through the backend rather than straight from the browser, which

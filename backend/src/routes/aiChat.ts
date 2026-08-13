@@ -642,7 +642,7 @@ ${writesEnabled
   : "Read-only mode is on: send_request only works for GET and login. If a test needs a write, say so instead of retrying, or offer to draft it with create_request so the user can send it themselves."}
 
 ${baseUrl
-  ? `The API under test is at ${baseUrl}. Every scanned route below is relative to that origin, so build urls as ${baseUrl} followed by the path. Never guess a different host or port. If a route returns html instead of json, say the origin looks wrong rather than concluding the project is misconfigured.`
+  ? `The API under test is at ${baseUrl}. Every scanned route below is relative to that origin, so build urls as ${baseUrl} followed by the path. Copy it exactly, scheme included: writing https when it says http points at a port that is not listening, and a local dev server almost never speaks https. Never guess a different host or port. If a route returns html instead of json, say the origin looks wrong rather than concluding the project is misconfigured.`
   : "No base url was supplied. Ask which host and port to use rather than guessing one."}
 
 ${hasRoutes

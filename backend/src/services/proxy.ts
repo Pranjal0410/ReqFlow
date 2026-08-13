@@ -1,6 +1,6 @@
 import axios, { AxiosError } from "axios";
 import { ProxyRequest, ProxyResponse } from "../types";
-import { isPrivateTarget, TARGET_BLOCKED_MESSAGE } from "./targetGuard";
+import { isPrivateTarget, withScheme, TARGET_BLOCKED_MESSAGE } from "./targetGuard";
 import { parseServerTiming } from "./serverTiming";
 
 function emptyTiming(total: number) {
@@ -13,7 +13,11 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
   // enforced here rather than in the route, because the AI agent's
   // send_request tool calls this function directly and would otherwise
   // sidestep a check that only lived in the route handler
-  if (!isPrivateTarget(req.url)) {
+  // the guard and the request have to agree on the address, so both see the
+  // same normalised form
+  const url = withScheme(req.url);
+
+  if (!isPrivateTarget(url)) {
     return {
       status: 0,
       statusText: "blocked",
@@ -32,7 +36,7 @@ export async function forwardRequest(req: ProxyRequest): Promise<ProxyResponse> 
     // spent reading the body, instead of inventing a split of the total
     const response = await axios({
       method: req.method.toLowerCase(),
-      url: req.url,
+      url,
       headers: req.headers || {},
       data: req.body || undefined,
       timeout: 30000,

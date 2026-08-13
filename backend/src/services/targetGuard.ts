@@ -21,14 +21,28 @@ function parseIPv4(host: string): number[] | null {
   return nums;
 }
 
+// "localhost:3001" is how people write an address, and URL reads localhost: as
+// the scheme, so the guard used to call it a public host and say so. giving it
+// http:// first changes nothing about what is allowed, since the decision is
+// still made on the hostname, but it lets the ordinary spelling through.
+const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+export function withScheme(rawUrl: string): string {
+  const text = rawUrl.trim();
+  if (!text || HAS_SCHEME.test(text)) return text;
+  return `http://${text.replace(/^\/+/, "")}`;
+}
+
 export function isPrivateTarget(rawUrl: string): boolean {
   let url: URL;
   try {
-    url = new URL(rawUrl);
+    url = new URL(withScheme(rawUrl));
   } catch {
     return false;
   }
 
+  // anything that is not plain http stays refused, so a scheme we do not
+  // understand cannot slip past the hostname checks below
   if (url.protocol !== "http:" && url.protocol !== "https:") return false;
 
   const host = url.hostname.toLowerCase();

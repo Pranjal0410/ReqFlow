@@ -4,6 +4,7 @@ import { colors } from "../theme/colors";
 import { PhaseComparison } from "../lib/timings";
 import { radius, shadow, transition } from "../theme/tokens";
 import { ServerTimingSpan } from "../types";
+import { pathOf } from "../lib/url";
 import Icon from "./Icon";
 
 interface TraceStep {
@@ -28,14 +29,6 @@ interface Props {
   url: string;
   // how this run compares with earlier runs of the same endpoint
   comparisons: PhaseComparison[];
-}
-
-function safePath(url: string) {
-  try {
-    return new URL(url).pathname;
-  } catch {
-    return url;
-  }
 }
 
 // server-timing durations arrive as fractions of a millisecond fairly often.
@@ -112,7 +105,7 @@ export default function RuntimeTrace({ response, method, url, comparisons }: Pro
   const steps: TraceStep[] = [
     {
       label: "HTTP Request",
-      detail: `${method} ${safePath(url)}`,
+      detail: `${method} ${pathOf(url)}`,
       value: `${ms(total)} ms total`,
       time: total,
       accent: colors.traceRequest,

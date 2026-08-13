@@ -128,7 +128,7 @@ export default function RequestBuilder({
   const canSend = url.trim().length > 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
-  const ok = response && response.status < 400;
+  const ok = response && response.status >= 200 && response.status < 400;
 
   return (
     <View style={styles.container}>
@@ -332,6 +332,7 @@ export default function RequestBuilder({
             keyPlaceholder="param name"
             addLabel="+ Add Param"
             emptyHint="No query parameters. Adding one here writes it into the URL."
+            showToggle={false}
           />
         )}
 

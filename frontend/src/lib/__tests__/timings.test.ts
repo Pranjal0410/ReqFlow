@@ -37,8 +37,11 @@ describe("endpointKey", () => {
     expect(endpointKey("GET", URL)).not.toBe(endpointKey("POST", URL));
   });
 
-  it("still produces a key for a url that does not parse", () => {
-    expect(endpointKey("GET", "localhost:3001/x?a=1")).toBe("GET localhost:3001/x");
+  it("gives a schemeless url the same key as the full one", () => {
+    // otherwise typing the address either way splits one endpoint's history
+    // into two baselines that never compare against each other
+    expect(endpointKey("GET", "localhost:3001/x?a=1")).toBe("GET /x");
+    expect(endpointKey("GET", "http://localhost:3001/x")).toBe("GET /x");
   });
 });
 

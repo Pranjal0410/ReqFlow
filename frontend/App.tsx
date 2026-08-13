@@ -25,6 +25,7 @@ import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
 import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
 import { Variable, toMap, substitute } from "./src/lib/variables";
+import { withScheme, originOf } from "./src/lib/url";
 import {
   TimingHistory,
   record as recordTiming,
@@ -176,11 +177,8 @@ export default function App() {
   const target = React.useMemo(() => {
     const candidates = routes.length > 0 ? [activeTab.url, baseUrl] : [activeTab.url];
     for (const candidate of candidates) {
-      try {
-        return new URL(candidate).origin;
-      } catch {
-        // try the next one
-      }
+      const origin = originOf(candidate);
+      if (origin) return origin;
     }
     return null;
   }, [activeTab.url, baseUrl, routes.length]);
@@ -227,7 +225,7 @@ export default function App() {
       const result = await analyzeProject(projectPath);
       setRoutes(result.routes);
       setProjectName(projectPath.split("/").pop() || "Project");
-      setBaseUrl(scannedBaseUrl);
+      setBaseUrl(withScheme(scannedBaseUrl));
       setShowScan(false);
     } catch (err: any) {
       const detail = err?.response?.data?.error || err?.message || "unknown error";
@@ -294,7 +292,7 @@ export default function App() {
 
         const res = await sendRequest(
           tab.method,
-          substitute(tab.url, vars),
+          withScheme(substitute(tab.url, vars)),
           headerObj,
           parsedBody
         );
@@ -509,7 +507,7 @@ export default function App() {
 
       const res = await sendRequest(
         activeTab.method,
-        substitute(activeTab.url, vars),
+        withScheme(substitute(activeTab.url, vars)),
         headerObj,
         parsedBody
       );

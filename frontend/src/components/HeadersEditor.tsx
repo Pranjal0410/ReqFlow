@@ -17,6 +17,10 @@ interface Props {
   keyPlaceholder?: string;
   addLabel?: string;
   emptyHint?: string;
+  // query parameters live in the url, and a row that is switched off has
+  // nowhere to be written, so it would vanish on the next read. headers are
+  // held in the tab, so theirs round-trips.
+  showToggle?: boolean;
 }
 
 export default function HeadersEditor({
@@ -25,6 +29,7 @@ export default function HeadersEditor({
   keyPlaceholder = "header name",
   addLabel,
   emptyHint,
+  showToggle = true,
 }: Props) {
   const updateRow = (index: number, field: "key" | "value", val: string) => {
     const updated = [...headers];
@@ -50,7 +55,7 @@ export default function HeadersEditor({
     <View style={styles.container}>
       {/* column headers */}
       <View style={styles.headerRow}>
-        <View style={{ width: 30 }} />
+        {showToggle && <View style={{ width: 30 }} />}
         <Text style={[styles.colLabel, { flex: 1 }]}>Key</Text>
         <Text style={[styles.colLabel, { flex: 1 }]}>Value</Text>
         <View style={{ width: 30 }} />
@@ -59,13 +64,15 @@ export default function HeadersEditor({
       <ScrollView>
         {headers.map((row, i) => (
           <View key={i} style={styles.row}>
-            <Pressable style={styles.checkbox} onPress={() => toggleRow(i)}>
-              <Icon
-                name={row.enabled ? "check" : "circle"}
-                size={15}
-                color={row.enabled ? colors.statusOk : colors.textDim}
-              />
-            </Pressable>
+            {showToggle && (
+              <Pressable style={styles.checkbox} onPress={() => toggleRow(i)}>
+                <Icon
+                  name={row.enabled ? "check" : "circle"}
+                  size={15}
+                  color={row.enabled ? colors.statusOk : colors.textDim}
+                />
+              </Pressable>
+            )}
 
             <TextInput
               style={[styles.input, !row.enabled && styles.disabled]}

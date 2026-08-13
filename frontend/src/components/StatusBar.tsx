@@ -15,7 +15,10 @@ export default function AppStatusBar({
   targetUp,
   requestCount,
 }: Props) {
-  const host = target ? target.replace(/^https?:\/\//, "") : null;
+  // only http is dropped. leaving https visible is what tells you the tab is
+  // asking for a scheme the server does not speak, which otherwise looks
+  // identical to the address that works.
+  const host = target ? target.replace(/^http:\/\//, "") : null;
 
   // one origin is polled, so the label names that origin. saying "all services
   // operational" would be claiming something never checked

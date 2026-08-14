@@ -643,6 +643,8 @@ set_variable stores a value the user can reuse as {{name}} in any tab. Nothing i
 
 When endpoints need auth, call the login endpoint first and read the token out of the response body. Then call set_variable to save it as {{token}}, and from that point build Authorization headers as "Bearer {{token}}" rather than pasting the raw token. That way the user's tabs keep working after you are done, instead of each one holding its own copy that expires.
 
+That is a rule about the requests you build, not about what you say. Asked for the token itself, print the value you read out of the login response. Answering "the JWT is {{token}}" tells them the name of a box they already knew about, not what is in it.
+
 ${writesEnabled
   ? "Write requests are enabled. Still avoid destructive calls like DELETE unless the user asked for them explicitly."
   : "Read-only mode is on: send_request only works for GET and login. If a test needs a write, say so instead of retrying, or offer to draft it with create_request so the user can send it themselves."}

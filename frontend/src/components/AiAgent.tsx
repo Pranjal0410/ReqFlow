@@ -148,9 +148,21 @@ export default function AiAgent({
 
     try {
       // build context about detected routes
+      // the scan already worked out what each endpoint expects. sending only
+      // the method and path left the agent to invent field names, so a POST
+      // came back 400 for a body the scan could have supplied.
       const routeContext = routes.length > 0
         ? `\n\nDetected API endpoints in the current project:\n${routes
-            .map((r) => `${r.method} ${r.path} - ${r.description}`)
+            .map((r) => {
+              const lines = [`${r.method} ${r.path} - ${r.description}`];
+              if (r.params && r.params.length) {
+                lines.push(`  params: ${r.params.join(", ")}`);
+              }
+              if (r.body) {
+                lines.push(`  body: ${JSON.stringify(r.body)}`);
+              }
+              return lines.join("\n");
+            })
             .join("\n")}`
         : "\n\nNo project has been scanned yet.";
 

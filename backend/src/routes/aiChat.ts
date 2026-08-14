@@ -236,6 +236,59 @@ function isAllowed(method: string, url: string, allowWrites: boolean) {
   return false;
 }
 
+// the free tier answers 503 "high demand" often enough that a run of a dozen
+// endpoints will meet one. it clears on its own, so it is worth waiting out
+// rather than handing the user the provider's url.
+const RETRYABLE = /\b(429|500|502|503|504)\b/;
+const RETRY_DELAYS_MS = [1000, 3000, 7000];
+
+function readableModelError(err: any): string {
+  const raw = String(err?.message || err);
+  if (RETRYABLE.test(raw)) {
+    return "The model is busy right now. Everything above already happened; ask again to carry on.";
+  }
+  if (/api[_ ]?key|permission|401|403/i.test(raw)) {
+    return "The model rejected the API key. Check GEMINI_API_KEY in backend/.env.";
+  }
+  if (/quota|exhausted/i.test(raw)) {
+    return "The model's quota for today is used up. Everything above already happened.";
+  }
+  return raw;
+}
+
+// A run can take a minute across a dozen endpoints, and until it returned the
+// panel showed a spinner and nothing else. The log is built up as the run goes,
+// so it is published here for the frontend to poll rather than being held back
+// until the whole thing finishes.
+const runs = new Map<string, { log: ActionLogEntry[]; at: number }>();
+const RUN_TTL_MS = 5 * 60 * 1000;
+
+function publishRun(runId: string | undefined, log: ActionLogEntry[]) {
+  if (!runId) return;
+  runs.set(runId, { log, at: Date.now() });
+  // a client that goes away mid-run would otherwise leave its log behind
+  for (const [id, entry] of runs) {
+    if (Date.now() - entry.at > RUN_TTL_MS) runs.delete(id);
+  }
+}
+
+router.get("/progress/:runId", (req: Request, res: Response) => {
+  const entry = runs.get(String(req.params.runId));
+  res.json({ actions: entry ? entry.log : [] });
+});
+
+async function sendWithRetry<T>(send: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await send();
+    } catch (err: any) {
+      const retryable = RETRYABLE.test(String(err?.message || err));
+      if (!retryable || attempt >= RETRY_DELAYS_MS.length) throw err;
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+}
+
 // one line per thing the agent did, sent or written. this is what the user sees
 // under the reply, and it is the whole accountability story now that nothing is
 // gated behind a confirmation.
@@ -574,7 +627,7 @@ export async function runTool(call: FunctionCall, ctx: ToolCtx) {
 }
 
 router.post("/", async (req: Request, res: Response) => {
-  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables } = req.body;
+  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables, runId } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: "message is required" });
@@ -677,7 +730,7 @@ Keep answers concise. After testing, summarise results compactly, one line per e
       ],
     });
 
-    let result = await chat.sendMessage(message);
+    let result = await sendWithRetry(() => chat.sendMessage(message));
 
     // trace is the visible record of everything the agent did. uiActions is the
     // separate mechanism the frontend applies. keeping them apart is what stops
@@ -690,11 +743,19 @@ Keep answers concise. After testing, summarise results compactly, one line per e
       used: alreadyUsed,
     };
 
+    // the array is shared, so every push during the run is visible to a poll
+    publishRun(runId, ctx.log);
+
+    // a failure part way through must not throw away the work already done.
+    // by round eight the agent may have logged in, saved a token and tested
+    // half the project; the actions are spent either way.
+    let interrupted: string | null = null;
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const calls = result.response.functionCalls();
       if (!calls || calls.length === 0) break;
 
-      const parts = [];
+      const parts: any[] = [];
       for (const call of calls) {
         const output = await runTool(call, ctx);
         parts.push({
@@ -702,20 +763,29 @@ Keep answers concise. After testing, summarise results compactly, one line per e
         });
       }
 
-      result = await chat.sendMessage(parts as any);
+      try {
+        result = await sendWithRetry(() => chat.sendMessage(parts as any));
+      } catch (err: any) {
+        interrupted = readableModelError(err);
+        break;
+      }
     }
 
     res.json({
-      response: result.response.text(),
+      response: interrupted
+        ? `${interrupted}${ctx.log.length ? "" : " Nothing was sent."}`
+        : result.response.text(),
       trace: ctx.log,
       uiActions: ctx.uiActions,
       actionsUsed: ctx.used,
       actionsRemaining: MAX_ACTIONS_PER_CHAT - ctx.used,
       actionLimit: MAX_ACTIONS_PER_CHAT,
     });
+
+    if (runId) runs.delete(runId);
   } catch (err: any) {
     console.error("ai chat error:", err.message);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: readableModelError(err) });
   }
 });
 

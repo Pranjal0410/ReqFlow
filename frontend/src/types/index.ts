@@ -65,6 +65,29 @@ export type SubTab =
   | "auth"
   | "tests";
 
+// Source for an endpoint the project does not have yet, written to match the
+// files it does have. It is shown and copied, never written: putting code into
+// someone's repository is a different decision from generating it, and it is
+// not one this app makes.
+export interface GeneratedLayer {
+  layer: string;
+  // where the code belongs, relative to the project root
+  path: string;
+  code: string;
+}
+
+export interface GeneratedEndpoint {
+  method: string;
+  path: string;
+  summary: string;
+  layers: GeneratedLayer[];
+  request: { headers: Record<string, string>; body: any | null };
+  // anything the developer still has to do by hand, e.g. a schema change
+  notes: string[];
+  // the real files the style was read from, named so the claim is checkable
+  references: { layer: string; path: string; reason: string }[];
+}
+
 export interface HistoryEntry {
   id: string;
   method: string;

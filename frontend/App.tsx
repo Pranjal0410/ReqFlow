@@ -11,6 +11,7 @@ import TabBar from "./src/components/TabBar";
 import RequestBuilder from "./src/components/RequestBuilder";
 import RuntimeTrace from "./src/components/RuntimeTrace";
 import ScanModal from "./src/components/ScanModal";
+import CodeView from "./src/components/CodeView";
 import Toast from "./src/components/Toast";
 import AppStatusBar from "./src/components/StatusBar";
 import {
@@ -19,7 +20,7 @@ import {
   checkTarget,
   exportOpenApi,
 } from "./src/services/api";
-import { DetectedRoute, RequestTab, HistoryEntry } from "./src/types";
+import { DetectedRoute, RequestTab, HistoryEntry, GeneratedEndpoint } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
@@ -66,6 +67,13 @@ export default function App() {
   // per endpoint timing samples, so a response can be read against its own past
   const [timings, setTimings] = useState<TimingHistory>({});
   const [recentScans, setRecentScans] = useState<string[]>([]);
+  // the folder behind the current scan, kept because generated code is written
+  // in the style of what is in it
+  const [projectPath, setProjectPath] = useState("");
+  // source for an endpoint the project does not have yet. it is held rather
+  // than shown once, so the log row in the chat can bring it back.
+  const [generated, setGenerated] = useState<GeneratedEndpoint | null>(null);
+  const [showCode, setShowCode] = useState(false);
 
   // nothing is written back until the saved workspace has been read, otherwise
   // the empty first render would immediately overwrite it
@@ -85,6 +93,7 @@ export default function App() {
         setVariables(saved.variables || []);
         setTimings(saved.timings || {});
         setRecentScans(saved.recentScans || []);
+        setProjectPath(saved.projectPath || "");
       }
       if (!cancelled) setHydrated(true);
     })();
@@ -108,10 +117,11 @@ export default function App() {
         variables,
         timings,
         recentScans,
+        projectPath,
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans]);
+  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans, projectPath]);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -128,6 +138,11 @@ export default function App() {
   React.useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
+
+  // A workspace saved before this field existed has a scan in it but no path,
+  // which would tell someone who has already scanned to go and scan. The most
+  // recent entry is that same folder, so it stands in.
+  const stylePath = projectPath || recentScans[0] || null;
 
   // what the agent is told the user is looking at. the response body is capped
   // because a chatty endpoint would otherwise fill the model's context with a
@@ -224,14 +239,15 @@ export default function App() {
 
   // the base url comes from the modal now: a scan that leaves it at a default
   // points every route it just found at whatever happens to run on port 3000
-  const handleScan = async (projectPath: string, scannedBaseUrl: string) => {
+  const handleScan = async (scannedPath: string, scannedBaseUrl: string) => {
     setScanning(true);
     try {
-      const result = await analyzeProject(projectPath);
+      const result = await analyzeProject(scannedPath);
       setRoutes(result.routes);
-      setProjectName(projectPath.split("/").pop() || "Project");
+      setProjectName(scannedPath.split("/").pop() || "Project");
+      setProjectPath(scannedPath);
       setBaseUrl(withScheme(scannedBaseUrl));
-      setRecentScans((prev) => [projectPath, ...prev.filter((p) => p !== projectPath)].slice(0, 4));
+      setRecentScans((prev) => [scannedPath, ...prev.filter((p) => p !== scannedPath)].slice(0, 4));
       setShowScan(false);
     } catch (err: any) {
       const detail = err?.response?.data?.error || err?.message || "unknown error";
@@ -362,6 +378,8 @@ export default function App() {
     setTimings({});
     setRecentScans([]);
     setProjectName("ReqFlow");
+    setProjectPath("");
+    setGenerated(null);
     setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
   };
@@ -477,6 +495,23 @@ export default function App() {
       }
       return [...prev, { key: name, value }];
     });
+  };
+
+  // an endpoint the project does not have yet. the code is shown, and a tab is
+  // drafted against it by the same reply, so the two arrive together.
+  const handleGeneratedCode = (next: GeneratedEndpoint) => {
+    setGenerated(next);
+    setShowCode(true);
+  };
+
+  // from the code view to the request it drafted. the tab is already there,
+  // opened by the create_request that rode along with the generation.
+  const handleOpenGeneratedRequest = () => {
+    setShowCode(false);
+    if (!generated) return;
+    const url = `${baseUrl.replace(/\/+$/, "")}${generated.path}`;
+    const tab = tabs.find((t) => t.method === generated.method && t.url === url);
+    if (tab) setActiveTabId(tab.id);
   };
 
   const handleAgentCreateAssertions = (assertions: AgentAssertion[]) => {
@@ -661,6 +696,9 @@ export default function App() {
           onSetVariable={handleAgentSetVariable}
           onFocusRequest={handleFocusRequest}
           variables={toMap(variables)}
+          projectPath={stylePath}
+          onGeneratedCode={handleGeneratedCode}
+          onShowCode={() => generated && setShowCode(true)}
         />
       </View>
 
@@ -674,6 +712,13 @@ export default function App() {
       />
 
       <Toast message={showScan ? null : error} onDismiss={() => setError(null)} />
+
+      <CodeView
+        visible={showCode}
+        generated={generated}
+        onClose={() => setShowCode(false)}
+        onOpenRequest={handleOpenGeneratedRequest}
+      />
 
       <ScanModal
         visible={showScan}

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from "express";
 import { GoogleGenerativeAI, SchemaType, FunctionCall } from "@google/generative-ai";
 import { forwardRequest } from "../services/proxy";
+import { generateEndpoint, GeneratedEndpoint } from "../services/codegen";
 
 const router = Router();
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
@@ -116,6 +117,23 @@ const setVariableTool = {
       value: { type: SchemaType.STRING, description: "The value to store" },
     },
     required: ["name", "value"],
+  },
+} as const;
+
+const generateCodeTool = {
+  name: "generate_code",
+  description:
+    "Write the code for an endpoint that does not exist yet, in the style of the project's own router, controller and service files. The code is shown to the user to read and copy; it is NOT written to their files. A ready-to-test request tab opens alongside it. Use this when the user asks you to implement, add, build, write or create an endpoint, rather than to test one. Works in read-only mode.",
+  parameters: {
+    type: SchemaType.OBJECT,
+    properties: {
+      description: {
+        type: SchemaType.STRING,
+        description:
+          "What the endpoint should do, in full. Include the method and path if the user gave them, what it accepts, what it returns, and any auth or validation they mentioned. Everything the code generator knows comes from this string, so do not abbreviate it.",
+      },
+    },
+    required: ["description"],
   },
 } as const;
 
@@ -260,12 +278,20 @@ function readableModelError(err: any): string {
 // panel showed a spinner and nothing else. The log is built up as the run goes,
 // so it is published here for the frontend to poll rather than being held back
 // until the whole thing finishes.
-const runs = new Map<string, { log: ActionLogEntry[]; at: number }>();
+// A tool that takes twenty seconds and only logs when it finishes leaves the
+// panel saying "thinking" for the whole of it. The note is a place for a tool
+// to say what it is doing while it is still doing it, and the object is shared
+// by reference so setting it mid-call is visible to the next poll.
+export interface RunNote {
+  text: string | null;
+}
+
+const runs = new Map<string, { log: ActionLogEntry[]; note: RunNote; at: number }>();
 const RUN_TTL_MS = 5 * 60 * 1000;
 
-function publishRun(runId: string | undefined, log: ActionLogEntry[]) {
+function publishRun(runId: string | undefined, log: ActionLogEntry[], note: RunNote) {
   if (!runId) return;
-  runs.set(runId, { log, at: Date.now() });
+  runs.set(runId, { log, note, at: Date.now() });
   // a client that goes away mid-run would otherwise leave its log behind
   for (const [id, entry] of runs) {
     if (Date.now() - entry.at > RUN_TTL_MS) runs.delete(id);
@@ -274,7 +300,7 @@ function publishRun(runId: string | undefined, log: ActionLogEntry[]) {
 
 router.get("/progress/:runId", (req: Request, res: Response) => {
   const entry = runs.get(String(req.params.runId));
-  res.json({ actions: entry ? entry.log : [] });
+  res.json({ actions: entry ? entry.log : [], note: entry ? entry.note.text : null });
 });
 
 async function sendWithRetry<T>(send: () => Promise<T>): Promise<T> {
@@ -308,7 +334,8 @@ export type ActionLogEntry =
     }
   | { kind: "draft"; method: string; url: string }
   | { kind: "assertions"; count: number }
-  | { kind: "variable"; name: string };
+  | { kind: "variable"; name: string }
+  | { kind: "code"; method: string; path: string; layers: number };
 
 // the shape the frontend's ResponseViewer already knows how to render
 interface LoggedResponse {
@@ -341,7 +368,10 @@ export type UiAction =
       label: string;
     }
   | { type: "create_assertions"; assertions: { field: string; operator: string; value: string }[] }
-  | { type: "set_variable"; name: string; value: string };
+  | { type: "set_variable"; name: string; value: string }
+  // generated source, for the code view to show. it is read-only output: the
+  // app has no path that writes to the user's files.
+  | { type: "generated_code"; generated: GeneratedEndpoint };
 
 // a model that is not happy with its first attempt calls the tool again with a
 // fuller version instead of replacing it, and both would be applied. matching
@@ -498,6 +528,74 @@ function setVariable(args: any, uiActions: UiAction[], log: ActionLogEntry[] = [
   };
 }
 
+// Two things come out of one generation: the code, which the user reads, and a
+// request against the endpoint it describes, which lands in a tab like any
+// scanned route. The tab is the point — code you cannot exercise is a wall of
+// text — but it is drafted rather than sent, because the endpoint it points at
+// does not exist until someone pastes the code in.
+async function runGenerateCode(
+  args: any,
+  ctx: ToolCtx
+): Promise<{ error: string } | Record<string, any>> {
+  const description = String(args.description ?? "").trim();
+
+  if (!description) return { error: "description is required" };
+  if (!ctx.projectPath) {
+    return {
+      error:
+        "No project folder is known, so there is no code to read a style from. Ask the user to press Scan Project first. Do not retry.",
+    };
+  }
+
+  let generated: GeneratedEndpoint;
+  // reading the project and writing three layers takes the better part of half
+  // a minute, and a spinner that says "thinking" for all of it is the same
+  // spinner as one that has hung
+  if (ctx.note) ctx.note.text = "reading your project's style, then writing the code";
+  try {
+    generated = await generateEndpoint(ctx.projectPath, description);
+  } catch (err: any) {
+    return { error: `${err.message} Do not retry.` };
+  } finally {
+    if (ctx.note) ctx.note.text = null;
+  }
+
+  ctx.uiActions.push({ type: "generated_code", generated });
+  ctx.log.push({
+    kind: "code",
+    method: generated.method,
+    path: generated.path,
+    layers: generated.layers.length,
+  });
+
+  // the same flow a scanned route gets: a filled in tab waiting on Send
+  if (ctx.baseUrl && generated.path) {
+    createRequest(
+      {
+        method: generated.method,
+        url: `${ctx.baseUrl.replace(/\/+$/, "")}${generated.path}`,
+        headers: JSON.stringify(generated.request.headers || {}),
+        body: generated.request.body === null ? "" : JSON.stringify(generated.request.body),
+        label: `${generated.method} ${generated.path}`,
+      },
+      ctx.uiActions,
+      // deliberately not the run log: the draft is part of this one action, and
+      // logging it separately would read as two things having happened
+      []
+    );
+  }
+
+  return {
+    ok: true,
+    method: generated.method,
+    path: generated.path,
+    layers: generated.layers.map((l) => `${l.layer} -> ${l.path}`),
+    styleReadFrom: generated.references.map((r) => r.path),
+    notes: generated.notes,
+    message: `The code is on screen in the code view, one tab per layer, and a ${generated.method} ${generated.path} tab is open for testing it once they have pasted it in. Nothing was written to their files. Summarise what you added in a sentence or two and mention anything in notes. Do not repeat the code itself, they can already see it.`,
+  };
+}
+
 async function runSendRequest(
   args: any,
   allowWrites: boolean,
@@ -585,6 +683,13 @@ export interface ToolCtx {
   vars: Record<string, string>;
   // actions already spent in this conversation, earlier turns included
   used: number;
+  // the folder the last scan read, which is where generated code gets its
+  // style from. null until something has been scanned.
+  projectPath?: string | null;
+  // used to build a testable url for a generated endpoint
+  baseUrl?: string | null;
+  // what is happening right now, for the panel to show while a slow tool runs
+  note?: RunNote;
 }
 
 export async function runTool(call: FunctionCall, ctx: ToolCtx) {
@@ -612,6 +717,9 @@ export async function runTool(call: FunctionCall, ctx: ToolCtx) {
     case "set_variable":
       out = setVariable(args, ctx.uiActions, ctx.log, ctx.vars);
       break;
+    case "generate_code":
+      out = await runGenerateCode(args, ctx);
+      break;
     default:
       return { error: `unknown tool ${call.name}. Do not retry.` };
   }
@@ -627,7 +735,7 @@ export async function runTool(call: FunctionCall, ctx: ToolCtx) {
 }
 
 router.post("/", async (req: Request, res: Response) => {
-  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables, runId } = req.body;
+  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables, runId, projectPath } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: "message is required" });
@@ -667,6 +775,7 @@ router.post("/", async (req: Request, res: Response) => {
             createRequestTool as any,
             createAssertionsTool as any,
             setVariableTool as any,
+            generateCodeTool as any,
           ],
         },
       ],
@@ -674,15 +783,15 @@ router.post("/", async (req: Request, res: Response) => {
 
     const systemPrompt = `You are an AI assistant built into ReqFlow, an API client that a developer runs on their own machine. It works like Postman or Insomnia: the developer points it at their own dev server and exercises their own endpoints. Sending requests to those endpoints is the normal, expected function of this tool, not an intrusion.
 
-You have three tools.
-
 send_request performs real HTTP requests from the ReqFlow backend, which runs locally, so localhost and private addresses are reachable. When the user asks you to test their endpoints, call send_request for each one and report the real results. Do not decline local or private addresses, and do not ask the user to run the requests themselves. If a specific call genuinely looks destructive, skip that one and say why, but still test the rest.
 
 create_request opens a pre-filled tab in the user's UI without sending anything. Use it when the user asks you to set up, prepare, draft or "open a request" they want to look over and send themselves. Do not follow it with send_request unless they also asked you to run it.
 
 create_assertions adds checks to the Tests panel of the user's active tab. Use it when they ask for tests or checks on a response. Base the fields on a response you actually saw when you have one.
 
-Choose by intent: "what happens if..." or "test this" means send_request, "set up" or "write me tests" means the create_ tools. Neither create_ tool touches the network, so both work in read-only mode.
+generate_code writes the source for an endpoint that does not exist yet, in the style of the project's own files, and shows it to the user. Use it when they ask you to implement, add, build or write an endpoint. Pass their request through in full: the description you send is the only thing the generator sees, so a one word summary produces one word's worth of code. It does not write to their files and never will, so do not tell them it has: say the code is on screen for them to copy. Call it once per endpoint. A generated endpoint does not exist on the server yet, so do not follow it with send_request to "check" it. That is a guaranteed 404 and a wasted action.
+
+Choose by intent: "what happens if..." or "test this" means send_request, "set up" or "write me tests" means the create_ tools, "add an endpoint that..." means generate_code. Only send_request touches the network, so everything else works in read-only mode.
 
 Act on the user's request directly. Do not ask for permission before calling a tool and do not describe what you are about to do and wait: they see a log of every action underneath your reply, so just do the work and report what happened.
 
@@ -741,10 +850,14 @@ Keep answers concise. After testing, summarise results compactly, one line per e
       log: [],
       vars: incomingVars,
       used: alreadyUsed,
+      projectPath: typeof projectPath === "string" && projectPath.trim() ? projectPath.trim() : null,
+      baseUrl: typeof baseUrl === "string" ? baseUrl : null,
+      note: { text: null },
     };
 
-    // the array is shared, so every push during the run is visible to a poll
-    publishRun(runId, ctx.log);
+    // both are shared by reference, so a push to the log or a note set mid-tool
+    // is visible to the next poll
+    publishRun(runId, ctx.log, ctx.note!);
 
     // a failure part way through must not throw away the work already done.
     // by round eight the agent may have logged in, saved a token and tested

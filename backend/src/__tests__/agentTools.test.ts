@@ -306,3 +306,41 @@ describe("set_variable", () => {
     expect(c.used).toBe(1);
   });
 });
+
+// generating code costs a model call, so the calls that could never succeed are
+// refused before one is spent
+describe("generate_code", () => {
+  const ctx = (projectPath: string | null = null): ToolCtx => ({
+    allowWrites: true,
+    uiActions: [],
+    log: [],
+    vars: {},
+    used: 0,
+    projectPath,
+    baseUrl: "http://localhost:3001",
+  });
+
+  it("refuses when nothing has been scanned, since there is no style to follow", async () => {
+    const c = ctx(null);
+    const out: any = await runTool(
+      { name: "generate_code", args: { description: "add a comments endpoint" } } as any,
+      c
+    );
+
+    expect(out.error).toMatch(/Scan Project/i);
+    expect(c.uiActions).toHaveLength(0);
+    // a refused call is not an action, so it does not eat the budget
+    expect(c.used).toBe(0);
+  });
+
+  it("refuses an empty description rather than generating from nothing", async () => {
+    const c = ctx("/tmp/whatever");
+    const out: any = await runTool(
+      { name: "generate_code", args: { description: "   " } } as any,
+      c
+    );
+
+    expect(out.error).toMatch(/description is required/i);
+    expect(c.used).toBe(0);
+  });
+});

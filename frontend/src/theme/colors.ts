@@ -42,6 +42,17 @@ export const colors = {
     punctuation: "#6b7280",
   },
 
+  // generated source. the same palette as json above, so a body and the code
+  // that produces it do not look like they came from different applications.
+  syntax: {
+    comment: "#6b7280",
+    string: "#8ee7b8",
+    keyword: "#a78bfa",
+    number: "#f5a524",
+    call: "#60a5fa",
+    plain: "#d4d4d8",
+  },
+
   // runtime trace step accents, mirroring the stat card bars in the reference
   traceRequest: "#4ade80",
   traceProcessing: "#60a5fa",

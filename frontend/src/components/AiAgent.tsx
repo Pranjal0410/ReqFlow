@@ -11,7 +11,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
-import { DetectedRoute, ApiResponse } from "../types";
+import { DetectedRoute, ApiResponse, GeneratedEndpoint } from "../types";
 import { CONFIG } from "../config";
 import Icon from "./Icon";
 import JsonView from "./JsonView";
@@ -25,6 +25,7 @@ function describeAction(a: ActionLogEntry | undefined): string | null {
   }
   if (a.kind === "draft") return `drafting ${a.method} ${short(a.url)}`;
   if (a.kind === "assertions") return `writing ${a.count} assertion${a.count === 1 ? "" : "s"}`;
+  if (a.kind === "code") return `writing ${a.method} ${a.path}`;
   return `saving {{${a.name}}}`;
 }
 
@@ -43,7 +44,8 @@ type ActionLogEntry =
     }
   | { kind: "draft"; method: string; url: string }
   | { kind: "assertions"; count: number }
-  | { kind: "variable"; name: string };
+  | { kind: "variable"; name: string }
+  | { kind: "code"; method: string; path: string; layers: number };
 
 // a request the agent already ran. it goes straight into a tab so the response
 // lands in the full width viewer, instead of being readable only in the chat
@@ -109,6 +111,12 @@ interface Props {
   // main screen instead of being the only place the result is readable
   onFocusRequest: (method: string, url: string) => void;
   variables: Record<string, string>;
+  // the folder the last scan read. generated code is written in the style of
+  // what is in it, so without one there is nothing to imitate.
+  projectPath: string | null;
+  onGeneratedCode: (generated: GeneratedEndpoint) => void;
+  // reopens the code view for a generation further up the conversation
+  onShowCode: () => void;
 }
 
 export default function AiAgent({
@@ -123,13 +131,16 @@ export default function AiAgent({
   onSetVariable,
   onFocusRequest,
   variables,
+  projectPath,
+  onGeneratedCode,
+  onShowCode,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Two limits: I can only reach localhost and private network addresses, and I get 30 actions per conversation.",
+        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• write a new endpoint in your project's own style\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Three limits: I can only reach localhost and private network addresses, I get 30 actions per conversation, and I never write to your files — generated code is shown for you to copy.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -166,8 +177,10 @@ export default function AiAgent({
     const poll = setInterval(async () => {
       try {
         const r = await fetch(`${CONFIG.API_BASE}/ai-chat/progress/${runId}`);
-        const { actions } = await r.json();
-        setProgress(describeAction(actions?.[actions.length - 1]));
+        const { actions, note } = await r.json();
+        // a tool still running says so itself; otherwise the last thing that
+        // finished is the best account of where the run is
+        setProgress(note || describeAction(actions?.[actions.length - 1]));
       } catch {
         // the run's own request carries the real errors; a missed poll is noise
       }
@@ -200,6 +213,7 @@ export default function AiAgent({
           message: userMsg.content,
           routeContext,
           baseUrl,
+          projectPath,
           allowWrites,
           actionsUsed,
           runId,
@@ -243,6 +257,8 @@ export default function AiAgent({
           onCreateAssertions(action.assertions);
         } else if (action.type === "set_variable") {
           onSetVariable(action.name, action.value);
+        } else if (action.type === "generated_code") {
+          onGeneratedCode(action.generated);
         }
       }
 
@@ -354,6 +370,26 @@ export default function AiAgent({
                   <Text style={{ color: colors.textDim }}>not sent</Text>
                 </Text>
               </View>
+            );
+          }
+          if (t.kind === "code") {
+            // the code view is a modal, so it is gone as soon as it is
+            // dismissed. this row is the way back to it.
+            return (
+              <Pressable
+                key={i}
+                onPress={onShowCode}
+                style={({ hovered }: any) => [styles.traceRow, hovered && styles.traceRowHover]}
+              >
+                <View style={styles.traceGutter} />
+                <Text style={styles.traceLine} numberOfLines={1}>
+                  <Text style={styles.traceVerb}>wrote</Text>{" "}
+                  <Text style={styles.traceMethod}>{t.method}</Text> {t.path}{" "}
+                  <Text style={{ color: colors.textDim }}>
+                    {t.layers} file{t.layers === 1 ? "" : "s"}, not saved
+                  </Text>
+                </Text>
+              </Pressable>
             );
           }
           if (t.kind === "assertions") {

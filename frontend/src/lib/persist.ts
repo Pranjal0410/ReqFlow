@@ -30,6 +30,9 @@ export interface Workspace {
   timings: TimingHistory;
   // folders already scanned, so the path does not have to be typed out again
   recentScans: string[];
+  // the folder behind the current scan. the agent reads style from it when
+  // generating code, so it has to outlive the modal that collected it.
+  projectPath: string;
 }
 
 // tabId -> headerName -> value
@@ -178,6 +181,7 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     // measurements, not credentials, so they ride along in the workspace blob
     timings: parsed.timings && typeof parsed.timings === "object" ? parsed.timings : {},
     recentScans: Array.isArray(parsed.recentScans) ? parsed.recentScans : [],
+    projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : "",
   };
 }
 

@@ -96,6 +96,16 @@ export function readProjectFilesCapped(rawPath: string): ProjectFiles {
   return { files, found, truncated: files.length < found };
 }
 
+// the codegen path ranks files by their name before deciding which ones are
+// worth opening, so it needs the walk without the reading that follows it
+export function listSourceFiles(rawPath: string): string[] {
+  const projectPath = expandHome(rawPath);
+  if (!fs.existsSync(projectPath)) {
+    throw new Error(`path not found: ${projectPath}`);
+  }
+  return walkDir(projectPath).slice(0, MAX_SCAN_EXAMINE);
+}
+
 // "~/projects/api" is what gets typed and pasted, and only a shell expands it
 export function expandHome(input: string): string {
   const text = input.trim();

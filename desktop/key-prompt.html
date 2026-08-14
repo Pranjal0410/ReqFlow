@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>ReqFlow</title>
+<style>
+  /* the same palette as the app, so this does not read as a system dialog
+     that wandered in from somewhere else */
+  :root {
+    --bg: #0a0a0a;
+    --surface: #18181a;
+    --border: #1f1f22;
+    --text: #ededf0;
+    --dim: #808090;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 26px;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  h1 { margin: 0 0 6px; font-size: 16px; font-weight: 500; }
+  p { margin: 0 0 16px; color: var(--dim); }
+  a { color: var(--text); }
+  input {
+    width: 100%;
+    padding: 11px 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font: 12px ui-monospace, Menlo, monospace;
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  input:focus { outline: none; border-color: var(--dim); }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+  .msg { flex: 1; font-size: 11px; color: var(--err); min-height: 16px; }
+  button {
+    padding: 9px 18px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--text);
+    color: var(--bg);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  button:disabled { opacity: 0.45; }
+  button.ghost { background: transparent; color: var(--dim); }
+</style>
+
+<h1>Add your Gemini API key</h1>
+<p>
+  ReqFlow uses Gemini to read your project and to run the agent. The key is
+  stored on this machine only. Get one free at
+  <a href="https://aistudio.google.com/apikey" id="link">aistudio.google.com/apikey</a>.
+</p>
+
+<input id="key" placeholder="paste your key here" spellcheck="false" autocomplete="off" autofocus />
+
+<div class="row">
+  <span class="msg" id="msg"></span>
+  <button class="ghost" id="skip">Skip for now</button>
+  <button id="save" disabled>Save</button>
+</div>
+
+<script>
+  const key = document.getElementById("key");
+  const save = document.getElementById("save");
+  const msg = document.getElementById("msg");
+
+  key.addEventListener("input", () => {
+    save.disabled = !key.value.trim();
+    msg.textContent = "";
+  });
+
+  document.getElementById("link").addEventListener("click", (e) => {
+    e.preventDefault();
+    window.reqflow.openExternal("https://aistudio.google.com/apikey");
+  });
+
+  // a key that is obviously not a key is caught here rather than becoming a
+  // model error much later, when the cause is no longer on screen
+  const submit = async () => {
+    const value = key.value.trim();
+    if (!value) return;
+    const result = await window.reqflow.saveKey(value);
+    if (!result.ok) {
+      msg.textContent = result.error;
+      return;
+    }
+    window.reqflow.done();
+  };
+
+  save.addEventListener("click", submit);
+  key.addEventListener("keydown", (e) => e.key === "Enter" && submit());
+
+  // skipping is allowed: everything except scanning and the agent works
+  // without a key, and being unable to get past this screen would be worse
+  document.getElementById("skip").addEventListener("click", () => window.reqflow.done());
+</script>

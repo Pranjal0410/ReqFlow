@@ -1,0 +1,72 @@
+{
+  "name": "reqflow-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ReqFlow as a desktop app: the Express backend and the Expo web build in one window",
+  "main": "main.js",
+  "scripts": {
+    "prepare-builds": "node scripts/prepare.js",
+    "start": "npm run prepare-builds && electron .",
+    "build:backend": "node scripts/build.js backend",
+    "build:frontend": "node scripts/build.js frontend",
+    "build:inputs": "node scripts/build.js",
+    "build": "npm run build:inputs && electron-builder --mac dmg",
+    "pack": "npm run build:inputs && electron-builder --dir",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "jest": "^30.4.2"
+  },
+  "build": {
+    "appId": "dev.reqflow.desktop",
+    "productName": "ReqFlow",
+    "directories": {
+      "output": "build",
+      "buildResources": "resources"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "key-prompt.html",
+      "lib/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "staging/backend",
+        "to": "backend"
+      },
+      {
+        "from": "../frontend/dist",
+        "to": "frontend"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "icon": "resources/icon.png"
+    },
+    "dmg": {
+      "title": "ReqFlow"
+    }
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/lib/__tests__/**/*.test.js"
+    ],
+    "modulePathIgnorePatterns": [
+      "<rootDir>/build/",
+      "<rootDir>/staging/"
+    ]
+  }
+}

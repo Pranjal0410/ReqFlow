@@ -37,8 +37,14 @@ function walkDir(dir: string, files: string[] = []): string[] {
 // Concatenating those produced an 800MB prompt, which is not a slow scan, it is
 // a backend that stops responding. The cap is on what gets sent; the caller is
 // told how much was left out so the result is never passed off as complete.
+//
+// The numbers come from measuring real projects rather than from taste. The
+// ones to hand read 7 to 18 route files and 67k to 141k characters, so 300
+// files and 800k characters leave roughly six times the largest of them. In
+// tokens that is about 200k, which the scan model has room for alongside the
+// prompt and its answer.
 export const MAX_SCAN_FILES = 300;
-export const MAX_SCAN_CHARS = 500_000;
+export const MAX_SCAN_CHARS = 800_000;
 
 export interface ProjectFiles {
   files: { path: string; content: string }[];

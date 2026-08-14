@@ -33,6 +33,9 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
   const [filesTotal, setFilesTotal] = React.useState<number | null>(null);
   const [detected, setDetected] = React.useState<DetectedPort | null>(null);
   const [probing, setProbing] = React.useState(false);
+  // a folder with thousands of files takes the better part of a minute to walk,
+  // and "reading folder..." on its own is indistinguishable from a hang
+  const [probeElapsed, setProbeElapsed] = React.useState(0);
   const [probeError, setProbeError] = React.useState<string | null>(null);
 
   // the path is read as it is typed rather than on submit, so the file count is
@@ -81,6 +84,16 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
   // a scan waits on Gemini, which can take a while. counting up is the honest
   // way to fill that gap: no invented percentage, just how long it has taken.
   const [elapsed, setElapsed] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!probing) {
+      setProbeElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setProbeElapsed(Date.now() - start), 100);
+    return () => clearInterval(id);
+  }, [probing]);
 
   React.useEffect(() => {
     if (!scanning) {
@@ -143,7 +156,12 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
             </View>
           )}
 
-          {probing && <Text style={styles.probe}>reading folder...</Text>}
+          {probing && (
+            <Text style={styles.probe}>
+              reading folder... {(probeElapsed / 1000).toFixed(1)}s
+              {probeElapsed > 6000 ? "  (a big folder takes a while, or edit the path to stop)" : ""}
+            </Text>
+          )}
           {!probing && probeError && <Text style={styles.probeBad}>{probeError}</Text>}
           {!probing && filesFound !== null && filesTotal === null && (
             <Text style={styles.probe}>

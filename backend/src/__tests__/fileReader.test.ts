@@ -147,7 +147,9 @@ describe("readProjectFilesCapped", () => {
   });
 
   it("stops on total size before the file count is reached", () => {
-    const big = 'const express = require("express"); app.get("/x", () => {});' + "x".repeat(120_000);
+    // sized against the cap, so the test does not care what the constant is
+    const each = Math.floor(MAX_SCAN_CHARS / 4);
+    const big = 'const express = require("express"); app.get("/x", () => {});' + "x".repeat(each);
     const out = readProjectFilesCapped(
       project({ "a.js": big, "b.js": big, "c.js": big, "d.js": big, "e.js": big, "f.js": big })
     );
@@ -159,7 +161,9 @@ describe("readProjectFilesCapped", () => {
   });
 
   it("skips one oversized file rather than giving up on the rest", () => {
-    const huge = 'const express = require("express"); app.get("/huge", () => {});' + "x".repeat(600_000);
+    const huge =
+      'const express = require("express"); app.get("/huge", () => {});' +
+      "x".repeat(MAX_SCAN_CHARS + 1000);
     const small = 'const express = require("express"); app.get("/small", () => {});';
 
     const out = readProjectFilesCapped(project({ "a-huge.js": huge, "b-small.js": small }));

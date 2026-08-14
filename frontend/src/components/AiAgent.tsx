@@ -16,6 +16,18 @@ import { CONFIG } from "../config";
 import Icon from "./Icon";
 import JsonView from "./JsonView";
 
+// the line shown while a run is under way, built from the last thing it did
+function describeAction(a: ActionLogEntry | undefined): string | null {
+  if (!a) return null;
+  const short = (url: string) => url.replace(/^https?:\/\/[^/]+/, "");
+  if (a.kind === "request") {
+    return `${a.refused ? "blocked" : "testing"} ${a.method} ${short(a.url)}`;
+  }
+  if (a.kind === "draft") return `drafting ${a.method} ${short(a.url)}`;
+  if (a.kind === "assertions") return `writing ${a.count} assertion${a.count === 1 ? "" : "s"}`;
+  return `saving {{${a.name}}}`;
+}
+
 // the agent acts without asking, so this log is how the user knows what it did.
 // sent and drafted stay distinguishable: a drafted tab went nowhere.
 type ActionLogEntry =
@@ -129,6 +141,9 @@ export default function AiAgent({
   const [actionLimit, setActionLimit] = useState(30);
   // which response in the log is open. one at a time keeps the panel readable.
   const [expanded, setExpanded] = useState<string | null>(null);
+  // what the agent is doing right now. a run of a dozen endpoints took a minute
+  // behind a spinner that said nothing about which one it was on.
+  const [progress, setProgress] = useState<string | null>(null);
   const scrollRef = React.useRef<ScrollView>(null);
 
   if (!visible) return null;
@@ -145,6 +160,18 @@ export default function AiAgent({
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
     setLoading(true);
+    setProgress(null);
+
+    const runId = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+    const poll = setInterval(async () => {
+      try {
+        const r = await fetch(`${CONFIG.API_BASE}/ai-chat/progress/${runId}`);
+        const { actions } = await r.json();
+        setProgress(describeAction(actions?.[actions.length - 1]));
+      } catch {
+        // the run's own request carries the real errors; a missed poll is noise
+      }
+    }, 700);
 
     try {
       // build context about detected routes
@@ -175,6 +202,7 @@ export default function AiAgent({
           baseUrl,
           allowWrites,
           actionsUsed,
+          runId,
           activeTab,
           variables,
           history: messages.slice(-6).map((m) => ({
@@ -239,6 +267,8 @@ export default function AiAgent({
         },
       ]);
     } finally {
+      clearInterval(poll);
+      setProgress(null);
       setLoading(false);
       setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
     }
@@ -419,8 +449,11 @@ export default function AiAgent({
           )
         )}
         {loading && (
-          <View style={[styles.msgBubble, styles.aiMsg]}>
+          <View style={[styles.msgBubble, styles.aiMsg, styles.working]}>
             <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={styles.workingText} numberOfLines={1}>
+              {progress || "thinking"}
+            </Text>
           </View>
         )}
       </ScrollView>
@@ -584,6 +617,18 @@ const styles = StyleSheet.create({
   },
   traceVerb: {
     color: colors.textDim,
+  },
+  working: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    maxWidth: "100%",
+  },
+  workingText: {
+    flex: 1,
+    color: colors.textDim,
+    fontSize: 12,
+    fontFamily: "monospace",
   },
   traceRow: {
     flexDirection: "row",

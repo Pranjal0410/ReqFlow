@@ -251,3 +251,47 @@ describe("pickStyleReferences across naming conventions", () => {
     expect(Object.values(picked).some((p) => p.includes(".next"))).toBe(false);
   });
 });
+
+// a next.js project has neither a routes/ directory nor a router.get() call in
+// it, and used to yield no exemplar at all
+describe("pickStyleReferences on file based routing", () => {
+  const ROUTE_FILE = `
+import { NextResponse } from "next/server";
+import prisma from "@/lib/prisma";
+
+export async function GET(req: Request) {
+  const products = await prisma.product.findMany();
+  return NextResponse.json(products);
+}
+`;
+
+  it("treats a route file as the router layer", () => {
+    const dir = project({
+      "app/api/products/route.ts": ROUTE_FILE,
+      "app/dashboard/page.tsx": "export default function Page() { return null; }",
+    });
+
+    expect(pick(dir).router).toBe("app/api/products/route.ts");
+  });
+
+  it("reads lib/ as the service layer, which is where these projects put it", () => {
+    const dir = project({
+      "app/api/products/route.ts": ROUTE_FILE,
+      "lib/mail-service.ts": SERVICE,
+    });
+
+    expect(pick(dir).service).toBe("lib/mail-service.ts");
+  });
+
+  // lib/ is the weaker signal of the two, so a project with both keeps the one
+  // that says what it is
+  it("still prefers services/ when a project has both", () => {
+    const dir = project({
+      "routes/users.js": ROUTER,
+      "services/users.js": SERVICE,
+      "lib/helpers.js": SERVICE,
+    });
+
+    expect(pick(dir).service).toBe("services/users.js");
+  });
+});

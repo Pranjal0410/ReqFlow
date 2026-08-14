@@ -1,6 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { isFileRoute } from "./frameworkRoutes";
 
 // Compiled output looks like source to a walk: a .next chunk mentions Route and
 // router and is a .js file. Pointed at a Next.js project, every one of the 18
@@ -101,7 +102,9 @@ export function readProjectFilesCapped(rawPath: string): ProjectFiles {
       continue;
     }
 
-    if (!ROUTE_KEYWORDS.some((kw) => content.includes(kw))) continue;
+    // a next.js route file can contain none of these keywords and still be an
+    // endpoint, because the framework reads the filename rather than the code
+    if (!ROUTE_KEYWORDS.some((kw) => content.includes(kw)) && !isFileRoute(filePath)) continue;
     found++;
 
     // counted but not kept, so the total stays honest without being held on to

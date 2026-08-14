@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
-import { readProjectFiles, readProjectFilesCapped } from "../services/fileReader";
+import { readProjectFilesCapped } from "../services/fileReader";
 import { analyzeCode } from "../services/gemini";
 import { buildOpenApi } from "../services/openapi";
 import { detectPort } from "../services/portDetector";
@@ -24,7 +24,7 @@ const cache = new Map<string, CacheEntry>();
 
 // bumped when the analyze prompt changes, so a cached scan is not served with
 // answers the old prompt produced
-const PROMPT_VERSION = "2";
+const PROMPT_VERSION = "3";
 
 function fingerprint(files: { path: string; content: string }[]): string {
   const hash = crypto.createHash("sha1");

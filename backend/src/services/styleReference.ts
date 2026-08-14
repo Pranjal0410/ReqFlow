@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { listSourceFiles, expandHome } from "./fileReader";
+import { isFileRoute } from "./frameworkRoutes";
 
 // Generated code that does not look like the project it is going into is code
 // nobody pastes. So before writing anything, one real file per layer is picked
@@ -35,6 +36,14 @@ const DIR_HINTS: Record<Layer, RegExp> = {
   service: /(^|\/)(services?|usecases?|repositories|repos|domain)(\/|$)/i,
 };
 
+// Weaker than the names above and scored lower, so a project with both a
+// services/ and a lib/ still contributes services/. lib/ is where a Next.js
+// project keeps the code an express project would call a service, and without
+// it such a project has no service layer to imitate at all.
+const WEAK_DIR_HINTS: Partial<Record<Layer, RegExp>> = {
+  service: /(^|\/)(lib|helpers?|utils)(\/|$)/i,
+};
+
 const NAME_HINTS: Record<Layer, RegExp> = {
   router: /(^|[.\-_])(routes?|router)([.\-_]|$)/i,
   controller: /(^|[.\-_])(controllers?|handlers?)([.\-_]|$)/i,
@@ -54,7 +63,15 @@ const CLIENT_TREE =
 function pathScore(layer: Layer, filePath: string): number {
   const dir = path.dirname(filePath);
   const name = path.basename(filePath).replace(/\.[jt]sx?$/, "");
-  return (DIR_HINTS[layer].test(dir) ? 3 : 0) + (NAME_HINTS[layer].test(name) ? 3 : 0);
+
+  // a next.js route file is the router: the framework reads its folder for the
+  // path, so the file itself is where a request is registered and handled
+  if (layer === "router" && isFileRoute(filePath)) return 4;
+
+  const strong = (DIR_HINTS[layer].test(dir) ? 3 : 0) + (NAME_HINTS[layer].test(name) ? 3 : 0);
+  if (strong > 0) return strong;
+
+  return WEAK_DIR_HINTS[layer]?.test(dir) ? 2 : 0;
 }
 
 // what the file actually does, which outranks where it happens to live. plenty
@@ -68,6 +85,11 @@ function contentScore(layer: Layer, content: string): number {
     let score = 0;
     if (registersRoutes) score += 4;
     if (/\bexpress\s*\.\s*Router\s*\(/.test(content)) score += 3;
+    // the file based equivalent: an exported verb is how the framework is told
+    // which method this file answers
+    if (/export\s+(async\s+)?(function\s+|const\s+)(GET|POST|PUT|PATCH|DELETE)\b/.test(content)) {
+      score += 4;
+    }
     return score;
   }
 

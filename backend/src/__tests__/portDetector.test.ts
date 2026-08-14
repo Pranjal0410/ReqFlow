@@ -57,3 +57,40 @@ describe("detectPort", () => {
     expect(detectPort(project({}), [])).toBeNull();
   });
 });
+
+// next, vite and nest all take the port as a flag rather than as an env var,
+// and a framework that picks its own says nothing anywhere
+describe("detectPort, framework projects", () => {
+  it("reads a port out of a --port flag in a script", () => {
+    const dir = project({
+      "package.json": JSON.stringify({ scripts: { dev: "next dev -p 3001" } }),
+    });
+    expect(detectPort(dir, [])).toEqual({
+      port: 3001,
+      source: "package.json, dev script",
+    });
+  });
+
+  it("reads the long form too", () => {
+    const dir = project({
+      "package.json": JSON.stringify({ scripts: { start: "nest start --port 4200" } }),
+    });
+    expect(detectPort(dir, [])?.port).toBe(4200);
+  });
+
+  // stated as the default it is, not passed off as something found in the code
+  it("falls back to the framework's default and says so", () => {
+    const dir = project({
+      "package.json": JSON.stringify({ dependencies: { next: "15.0.0" } }),
+    });
+    expect(detectPort(dir, [])).toEqual({ port: 3000, source: "next's default" });
+  });
+
+  it("prefers something the project actually wrote over the default", () => {
+    const dir = project({
+      ".env": "PORT=4500",
+      "package.json": JSON.stringify({ dependencies: { next: "15.0.0" } }),
+    });
+    expect(detectPort(dir, [])).toEqual({ port: 4500, source: ".env" });
+  });
+});

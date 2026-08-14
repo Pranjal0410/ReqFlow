@@ -48,12 +48,42 @@ function fromPackageScripts(projectPath: string): DetectedPort | null {
   try {
     const scripts = JSON.parse(body).scripts || {};
     for (const [name, command] of Object.entries(scripts)) {
-      const match = String(command).match(/PORT\s*=\s*(\d+)/);
+      // PORT=3001 node server.js, and the flag form that next, vite and nest
+      // all use instead: next dev -p 3001
+      const match =
+        String(command).match(/PORT\s*=\s*(\d+)/) ||
+        String(command).match(/(?:^|\s)--?p(?:ort)?[\s=](\d+)/);
       const port = match && valid(match[1]);
       if (port) return { port, source: `package.json, ${name} script` };
     }
   } catch {
     // a package.json that will not parse is not worth failing a scan over
+  }
+  return null;
+}
+
+// A framework that picks its own port says nothing about it anywhere, so there
+// is nothing to read. Its default is still a real fact about where the server
+// will be, and the source is named so it reads as the default it is rather than
+// as something found in the project.
+const FRAMEWORK_DEFAULTS: { dep: string; port: number; name: string }[] = [
+  { dep: "next", port: 3000, name: "next" },
+  { dep: "nuxt", port: 3000, name: "nuxt" },
+  { dep: "@nestjs/core", port: 3000, name: "nest" },
+];
+
+function fromFrameworkDefault(projectPath: string): DetectedPort | null {
+  const body = readIfPresent(path.join(projectPath, "package.json"));
+  if (!body) return null;
+
+  try {
+    const pkg = JSON.parse(body);
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    for (const { dep, port, name } of FRAMEWORK_DEFAULTS) {
+      if (deps[dep]) return { port, source: `${name}'s default` };
+    }
+  } catch {
+    // an unparseable package.json is not worth failing a scan over
   }
   return null;
 }
@@ -81,5 +111,10 @@ export function detectPort(
   files: { path: string; content: string }[]
 ): DetectedPort | null {
   const projectPath = expandHome(rawPath);
-  return fromEnvFile(projectPath) || fromPackageScripts(projectPath) || fromSource(files);
+  return (
+    fromEnvFile(projectPath) ||
+    fromPackageScripts(projectPath) ||
+    fromSource(files) ||
+    fromFrameworkDefault(projectPath)
+  );
 }

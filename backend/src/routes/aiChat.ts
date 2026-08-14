@@ -466,8 +466,13 @@ async function runSendRequest(
     };
   }
 
+  // the wire gets the resolved values, the tab keeps the {{name}} it was
+  // written with. a tab holding a raw token stops working when that token
+  // expires; one holding {{token}} keeps working after the next login.
   const requestHeaders = parseJsonArg(resolveVars(String(args.headers ?? ""), vars));
   const requestBody = parseJsonArg(resolveVars(String(args.body ?? ""), vars));
+  const writtenHeaders = parseJsonArg(String(args.headers ?? ""));
+  const writtenBody = parseJsonArg(String(args.body ?? ""));
 
   const result = await forwardRequest({
     method,
@@ -492,8 +497,9 @@ async function runSendRequest(
     url,
     status: result.status,
     refused: false,
-    requestHeaders: requestHeaders && typeof requestHeaders === "object" ? requestHeaders : {},
-    requestBody: formatBody(requestBody),
+    requestHeaders:
+      writtenHeaders && typeof writtenHeaders === "object" ? writtenHeaders : {},
+    requestBody: formatBody(writtenBody ?? requestBody),
     response: {
       status: result.status,
       statusText: result.statusText,

@@ -61,7 +61,11 @@ one at a time and reports how they did together.
 **Keeps variables.** Anything written as `{{name}}` in a url, header or body is
 resolved just before the request goes out, so a token fetched once works in every
 tab instead of living in whichever one logged in. A variable whose name looks
-like a credential is masked and kept out of the saved workspace.
+like a credential is masked and kept out of the saved workspace, which also means
+its value does not survive closing the browser: a request that still refers to it
+says so rather than sending an empty header. Once a token is saved, routes opened
+from the sidebar carry `Bearer {{token}}` already, so they do not each have to be
+authorised by hand.
 
 ## The agent
 
@@ -133,7 +137,7 @@ address written down, since `localhost` there is the phone: set `DEV_IP` in
 
 ```bash
 cd backend && npm test     # 85
-cd frontend && npm test    # 65
+cd frontend && npm test    # 69
 ```
 
 The backend covers the proxy, the target guard, the analyze route and its cache,

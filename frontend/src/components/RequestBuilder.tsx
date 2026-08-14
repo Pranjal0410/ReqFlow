@@ -22,6 +22,7 @@ import { SubTab, TestCase } from "../types";
 import { paramsFromUrl, urlWithParams } from "../lib/queryParams";
 import { namesIn, unfilled } from "../lib/pathParams";
 import { placeholderFields } from "../lib/placeholders";
+import { missingIn } from "../lib/variables";
 
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
@@ -53,6 +54,7 @@ interface Props {
   onPathParamsChange: (values: Record<string, string>) => void;
   onSaveToken: (value: string) => void;
   savedToken?: string | null;
+  variables: Record<string, string>;
 }
 
 export default function RequestBuilder({
@@ -76,6 +78,7 @@ export default function RequestBuilder({
   onPathParamsChange,
   onSaveToken,
   savedToken,
+  variables,
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
@@ -147,9 +150,18 @@ export default function RequestBuilder({
   // reason to say so before the request comes back rejected.
   const placeholders = placeholderFields(body);
   const missingPath = unfilled(url, pathParams);
+  // a {{name}} with nothing behind it would be sent as an empty string, so the
+  // request fails somewhere far from the cause
+  const missingVars = [
+    ...new Set([
+      ...missingIn(url, variables),
+      ...headers.filter((h) => h.enabled).flatMap((h) => missingIn(h.value, variables)),
+      ...missingIn(body, variables),
+    ]),
+  ];
   // sending /api/incidents/:id verbatim only ever produces a confusing 404, so
   // say what is missing instead of letting it go
-  const canSend = url.trim().length > 0 && missingPath.length === 0;
+  const canSend = url.trim().length > 0 && missingPath.length === 0 && missingVars.length === 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
   const ok = response && response.status >= 200 && response.status < 400;
@@ -227,6 +239,8 @@ export default function RequestBuilder({
         <Text style={styles.blocked}>
           {missingPath.length
             ? `Fill ${missingPath.map((n) => ":" + n).join(", ")} under Params before sending`
+            : missingVars.length
+            ? `${missingVars.map((n) => "{{" + n + "}}").join(", ")} has no value. Variables are cleared when the browser closes, so log in again to refill it.`
             : "Enter a URL to send"}
         </Text>
       )}

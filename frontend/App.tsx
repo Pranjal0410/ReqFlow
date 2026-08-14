@@ -243,6 +243,17 @@ export default function App() {
 
   const handleSelectRoute = (route: DetectedRoute) => {
     const newTab = createTab(baseUrl, route);
+
+    // once a token is in the workspace, every route opened from the sidebar
+    // used to come back 401 until the header was added by hand, one tab at a
+    // time. {{token}} rather than the value, so it survives the next login.
+    if (toMap(variables).token) {
+      newTab.headers = [
+        ...newTab.headers,
+        { key: "Authorization", value: "Bearer {{token}}", enabled: true },
+      ];
+    }
+
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
   };
@@ -617,6 +628,7 @@ export default function App() {
             onPathParamsChange={(v) => updateActiveTab({ pathParams: v })}
             onSaveToken={(value) => handleAgentSetVariable("token", value)}
             savedToken={toMap(variables).token || null}
+            variables={toMap(variables)}
             onScanPress={() => {
               setError(null);
               setShowScan(true);

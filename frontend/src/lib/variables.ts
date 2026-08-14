@@ -20,7 +20,11 @@ export function isSecretVariable(name: string): boolean {
 export function toMap(vars: Variable[]): Record<string, string> {
   const map: Record<string, string> = {};
   for (const v of vars) {
-    if (v.key.trim()) map[v.key.trim()] = v.value;
+    // a name with no value behind it counts as unset. a secret's value lives in
+    // sessionStorage, so after the browser is reopened the row survives while
+    // the value does not, and treating that as "" turned Bearer {{token}} into
+    // a silent "Bearer " rather than something anyone could see was wrong.
+    if (v.key.trim() && v.value) map[v.key.trim()] = v.value;
   }
   return map;
 }

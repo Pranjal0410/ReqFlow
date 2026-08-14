@@ -83,3 +83,27 @@ describe("findToken", () => {
     expect(findToken("a string")).toBeNull();
   });
 });
+
+// a secret's value lives in sessionStorage, so reopening the browser leaves the
+// row behind without it. treating that as "" sent "Bearer " and said nothing.
+describe("a name with no value", () => {
+  it("counts as unset rather than as an empty string", () => {
+    expect(toMap([{ key: "token", value: "" }])).toEqual({});
+  });
+
+  it("leaves the placeholder visible instead of blanking the header", () => {
+    const vars = toMap([{ key: "token", value: "" }]);
+    expect(substitute("Bearer {{token}}", vars)).toBe("Bearer {{token}}");
+  });
+
+  it("is reported as missing", () => {
+    const vars = toMap([{ key: "token", value: "" }]);
+    expect(missingIn("Bearer {{token}}", vars)).toEqual(["token"]);
+  });
+
+  it("still resolves once it has one", () => {
+    const vars = toMap([{ key: "token", value: "abc" }]);
+    expect(substitute("Bearer {{token}}", vars)).toBe("Bearer abc");
+    expect(missingIn("Bearer {{token}}", vars)).toEqual([]);
+  });
+});

@@ -33,10 +33,12 @@ the `:id` and can be pointed at a different record later. Send stays disabled
 until the placeholder has a value, rather than issuing a request that can only
 404.
 
-**Carries the token for you.** When a response body contains something that
-looks like a credential, the response header offers to save it as `{{token}}`
-in one click. Every tab can then use it, instead of the value being read out of
-the body and pasted into each one.
+**Carries the token for you.** When a successful response carries something that
+looks like a credential, it is saved as `{{token}}` without being asked, and the
+response header says so. Every tab can then use it, instead of the value being
+read out of the body and pasted into each one; there is a copy button next to it
+for the times you want it somewhere else. A failed response cannot overwrite a
+working token.
 
 **Shows what actually happened.** Status, response headers, syntax highlighted
 JSON, and a timing breakdown. The timings are measured, not estimated: the

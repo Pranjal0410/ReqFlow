@@ -31,12 +31,32 @@ export default function ResponseViewer({ response, loading, timingNote, onSaveTo
   const [copied, setCopied] = React.useState(false);
   const bodyRef = React.useRef<ScrollView>(null);
 
-  // the value every later request needs, offered where it appears instead of
+  // the value every later request needs, taken where it appears instead of
   // leaving it to be read out of the body and pasted into each tab
   const token = React.useMemo(
     () => (response ? findToken(response.data) : null),
     [response]
   );
+
+  const [tokenCopied, setTokenCopied] = React.useState(false);
+
+  // saved without asking. the alternative was a click on every login, and the
+  // value is already on screen by the time this runs. only on a successful
+  // response, so a 401 body that happens to echo a token cannot overwrite a
+  // working one, and only when it actually changed.
+  React.useEffect(() => {
+    if (!token || !onSaveToken) return;
+    if (!response || response.status < 200 || response.status >= 300) return;
+    if (savedTokenPath === token.value) return;
+    onSaveToken(token.value);
+  }, [token, response, savedTokenPath, onSaveToken]);
+
+  const copyToken = async () => {
+    if (!token) return;
+    await Clipboard.setStringAsync(token.value);
+    setTokenCopied(true);
+    setTimeout(() => setTokenCopied(false), 1600);
+  };
 
   // a re-sent request reuses this view, and the old scroll offset survives, so
   // a fresh response would open somewhere in its middle
@@ -140,23 +160,27 @@ export default function ResponseViewer({ response, loading, timingNote, onSaveTo
           </Pressable>
         </View>
 
-        {token && onSaveToken && (
+        {token && savedTokenPath === token.value && (
+          <View style={styles.action}>
+            <Icon name="check" size={13} color={colors.statusOk} />
+            <Text style={[styles.actionText, { color: colors.statusOk }]}>
+              Saved as {"{{token}}"}
+            </Text>
+          </View>
+        )}
+
+        {token && (
           <Pressable
             style={({ hovered }: any) => [styles.action, hovered && styles.actionHover]}
-            onPress={() => onSaveToken(token.value)}
+            onPress={copyToken}
           >
             <Icon
-              name={savedTokenPath === token.value ? "check" : "sparkle"}
+              name={tokenCopied ? "check" : "copy"}
               size={13}
-              color={savedTokenPath === token.value ? colors.statusOk : colors.accent}
+              color={tokenCopied ? colors.statusOk : colors.textDim}
             />
-            <Text
-              style={[
-                styles.actionText,
-                { color: savedTokenPath === token.value ? colors.statusOk : colors.accent },
-              ]}
-            >
-              {savedTokenPath === token.value ? "Saved as {{token}}" : `Use ${token.path}`}
+            <Text style={[styles.actionText, tokenCopied && { color: colors.statusOk }]}>
+              {tokenCopied ? "Copied" : `Copy ${token.path}`}
             </Text>
           </Pressable>
         )}

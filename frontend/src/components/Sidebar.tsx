@@ -207,7 +207,9 @@ export default function Sidebar({
               const key = `${route.method} ${route.path}`;
               const active = activePath === key;
               return (
-                <View key={i}>
+                // lifted while its description is up, or the rows after it
+                // paint over the floating box
+                <View key={i} style={hovered === key ? styles.routeRowRaised : undefined}>
                   <Pressable
                     style={({ hovered: h, pressed }: any) => [
                       styles.routeItem,
@@ -229,7 +231,10 @@ export default function Sidebar({
                     >
                       {route.method}
                     </Text>
-                    <Text style={[styles.path, active && styles.pathActive]}>
+                    <Text
+                      style={[styles.path, active && styles.pathActive]}
+                      numberOfLines={1}
+                    >
                       {route.path}
                     </Text>
                   </Pressable>
@@ -492,6 +497,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "500",
   },
+  routeRowRaised: {
+    zIndex: 20,
+  },
   routeItem: {
     flexDirection: "row",
     alignItems: "center",
@@ -513,9 +521,15 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "500",
     width: 50,
+    // a long path would otherwise squeeze this box until PATCH sat against the
+    // slash, since flex children shrink by default
+    flexShrink: 0,
     fontFamily: "monospace",
   },
   path: {
+    // takes the rest of the row and ends in an ellipsis, rather than running
+    // under the panel edge and cutting a word in half
+    flex: 1,
     color: colors.textMuted,
     fontSize: 13,
     fontFamily: "monospace",
@@ -524,16 +538,21 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   tooltip: {
-    marginTop: 2,
-    marginBottom: 4,
-    marginLeft: 10,
+    // laid over the rows below rather than inserted between them. in normal
+    // flow it pushed every route down as the pointer moved, so the list ran
+    // away from whatever was being aimed at.
+    position: "absolute",
+    top: "100%",
+    left: 10,
+    right: 4,
+    zIndex: 20,
     backgroundColor: colors.surfaceLight,
     borderLeftWidth: 2,
     borderLeftColor: colors.border,
     borderRadius: radius.sm,
     paddingVertical: 6,
     paddingHorizontal: 8,
-    ...shadow.sm,
+    ...shadow.md,
   },
   tooltipText: {
     color: colors.textMuted,

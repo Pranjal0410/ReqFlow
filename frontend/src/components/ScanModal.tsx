@@ -69,7 +69,14 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
         setFilesFound(null);
         setFilesTotal(null);
         setDetected(null);
-        setProbeError(err?.response?.data?.error || "could not read that folder");
+        // a dead backend used to read as a bad path, which points at the one
+        // thing that was fine
+        setProbeError(
+          err?.response?.data?.error ||
+            (err?.response
+              ? "could not read that folder"
+              : "ReqFlow's backend is not answering on port 4000. Start it with npm run dev.")
+        );
       } finally {
         if (!cancelled) setProbing(false);
       }

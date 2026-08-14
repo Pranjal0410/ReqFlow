@@ -3,6 +3,9 @@ import os from "os";
 import path from "path";
 
 const SKIP_DIRS = ["node_modules", ".git", "dist", "build", ".expo"];
+
+// what makes a file look like it defines routes
+const ROUTE_KEYWORDS = ["router", "app.get", "app.post", "app.put", "app.delete", "express", "Route"];
 const VALID_EXT = [".js", ".ts", ".jsx", ".tsx"];
 
 function walkDir(dir: string, files: string[] = []): string[] {
@@ -53,21 +56,44 @@ export interface ProjectFiles {
   truncated: boolean;
 }
 
-export function readProjectFilesCapped(projectPath: string): ProjectFiles {
-  const all = readProjectFiles(projectPath);
+// how many files are even opened. a folder deep enough to hold a hundred
+// thousand of them should not be walked for minutes before being refused.
+export const MAX_SCAN_EXAMINE = 5000;
 
-  const files: { path: string; content: string }[] = [];
-  let chars = 0;
-  for (const file of all) {
-    if (files.length >= MAX_SCAN_FILES) break;
-    // one oversized file, a bundle or a minified vendor blob, used to stop the
-    // loop dead and leave the scan with nothing. skip it and keep going.
-    if (chars + file.content.length > MAX_SCAN_CHARS) continue;
-    files.push(file);
-    chars += file.content.length;
+export function readProjectFilesCapped(rawPath: string): ProjectFiles {
+  const projectPath = expandHome(rawPath);
+  if (!fs.existsSync(projectPath)) {
+    throw new Error(`path not found: ${projectPath}`);
   }
 
-  return { files, found: all.length, truncated: files.length < all.length };
+  // read one at a time and keep only what fits. reading everything first and
+  // trimming afterwards still built the whole 800MB in memory, which is what
+  // took the backend down rather than merely making the scan slow.
+  const paths = walkDir(projectPath);
+  const files: { path: string; content: string }[] = [];
+  let chars = 0;
+  let found = 0;
+
+  for (const filePath of paths.slice(0, MAX_SCAN_EXAMINE)) {
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+
+    if (!ROUTE_KEYWORDS.some((kw) => content.includes(kw))) continue;
+    found++;
+
+    // counted but not kept, so the total stays honest without being held on to
+    if (files.length >= MAX_SCAN_FILES) continue;
+    if (chars + content.length > MAX_SCAN_CHARS) continue;
+
+    files.push({ path: filePath, content });
+    chars += content.length;
+  }
+
+  return { files, found, truncated: files.length < found };
 }
 
 // "~/projects/api" is what gets typed and pasted, and only a shell expands it
@@ -87,8 +113,6 @@ export function readProjectFiles(rawPath: string): { path: string; content: stri
 
   const files = walkDir(projectPath);
 
-  // only grab files that look like they have routes
-  const routeKeywords = ["router", "app.get", "app.post", "app.put", "app.delete", "express", "Route"];
 
   const relevant = files
     .map((f) => {
@@ -101,7 +125,7 @@ export function readProjectFiles(rawPath: string): { path: string; content: stri
       }
     })
     .filter((f): f is { path: string; content: string } => f !== null)
-    .filter((f) => routeKeywords.some((kw) => f.content.includes(kw)));
+    .filter((f) => ROUTE_KEYWORDS.some((kw) => f.content.includes(kw)));
 
   return relevant;
 }

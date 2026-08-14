@@ -654,6 +654,8 @@ ${baseUrl
 ${hasRoutes
   ? `These are the routes ReqFlow found in the user's project. Each one may come with the parameters it takes and a body read out of the code's own validators. That body is what the endpoint requires, not a suggestion: send those field names. Inventing your own, username where the code says email, spends an action to be told so in a 400.
 
+A create endpoint often has a value that has to be unique, an email, a username, a slug. The example body shows the shape, not a value to send verbatim: vary that field each time, for instance dev+7421@example.com rather than dev@example.com, or the second run of the same test always fails. If one does come back saying the value already exists, that is your input rather than a broken endpoint, so change it and send again instead of reporting a failure.
+
 Use these paths exactly as written, prefixes included. Do not shorten or invent one: if the list says /api/incidents, then /incidents is a different, wrong url. This applies to every url you build, not just the one the user named. If you need a login endpoint to get a token and no login route appears in this list, say so and ask, rather than trying /api/login or any other guess. A url that is not in this list is a wasted action.
 ${routeContext}`
   : `No project has been scanned, so you do not know a single real path on this server. Guessing one wastes an action and leaves the user with a tab pointing at an endpoint that does not exist. Do not try /health, /api/users or any other common looking url. Ask them to press Scan Project first, or to tell you the exact path they want, and call send_request only once you have one.`}

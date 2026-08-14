@@ -1,7 +1,13 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { readProjectFiles } from "../services/fileReader";
+import {
+  readProjectFiles,
+  readProjectFilesCapped,
+  MAX_SCAN_FILES,
+  MAX_SCAN_CHARS,
+  expandHome,
+} from "../services/fileReader";
 
 const tempDirs: string[] = [];
 
@@ -110,5 +116,77 @@ describe("readProjectFiles resilience", () => {
 
     expect(files).toHaveLength(1);
     expect(files[0].path).toMatch(/server\.js$/);
+  });
+});
+
+// pointing at a home folder rather than a project turned up thousands of files,
+// and concatenating those built an 800MB prompt
+describe("readProjectFilesCapped", () => {
+  it("passes a normal project through untouched", () => {
+    const dir = project({
+      "a.js": 'const express = require("express"); app.get("/a", () => {});',
+      "b.js": 'const express = require("express"); app.get("/b", () => {});',
+    });
+
+    const out = readProjectFilesCapped(dir);
+    expect(out.files).toHaveLength(2);
+    expect(out.found).toBe(2);
+    expect(out.truncated).toBe(false);
+  });
+
+  it("stops at the file cap and says how many there were", () => {
+    const files: Record<string, string> = {};
+    for (let i = 0; i < MAX_SCAN_FILES + 25; i++) {
+      files[`r${i}.js`] = 'const express = require("express"); app.get("/x", () => {});';
+    }
+
+    const out = readProjectFilesCapped(project(files));
+    expect(out.files).toHaveLength(MAX_SCAN_FILES);
+    expect(out.found).toBe(MAX_SCAN_FILES + 25);
+    expect(out.truncated).toBe(true);
+  });
+
+  it("stops on total size before the file count is reached", () => {
+    const big = 'const express = require("express"); app.get("/x", () => {});' + "x".repeat(120_000);
+    const out = readProjectFilesCapped(
+      project({ "a.js": big, "b.js": big, "c.js": big, "d.js": big, "e.js": big, "f.js": big })
+    );
+
+    expect(out.files.length).toBeLessThan(6);
+    expect(out.truncated).toBe(true);
+    const chars = out.files.reduce((n, f) => n + f.content.length, 0);
+    expect(chars).toBeLessThanOrEqual(MAX_SCAN_CHARS);
+  });
+
+  it("skips one oversized file rather than giving up on the rest", () => {
+    const huge = 'const express = require("express"); app.get("/huge", () => {});' + "x".repeat(600_000);
+    const small = 'const express = require("express"); app.get("/small", () => {});';
+
+    const out = readProjectFilesCapped(project({ "a-huge.js": huge, "b-small.js": small }));
+
+    expect(out.files).toHaveLength(1);
+    expect(out.files[0].path).toMatch(/b-small\.js$/);
+    expect(out.truncated).toBe(true);
+  });
+});
+
+// "~/projects/api" is what gets typed, and only a shell expands it
+describe("expandHome", () => {
+  it("expands a leading tilde", () => {
+    expect(expandHome("~/projects/api")).toBe(path.join(os.homedir(), "projects/api"));
+    expect(expandHome("~")).toBe(os.homedir());
+  });
+
+  it("leaves an absolute path alone", () => {
+    expect(expandHome("/Users/x/api")).toBe("/Users/x/api");
+  });
+
+  it("does not touch a tilde that is not the home shorthand", () => {
+    expect(expandHome("/tmp/~backup")).toBe("/tmp/~backup");
+    expect(expandHome("~user/api")).toBe("~user/api");
+  });
+
+  it("trims surrounding whitespace, which pasting adds", () => {
+    expect(expandHome("  /Users/x/api  ")).toBe("/Users/x/api");
   });
 });

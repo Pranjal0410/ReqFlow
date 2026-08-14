@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
-import { readProjectFiles } from "../services/fileReader";
+import { readProjectFiles, readProjectFilesCapped } from "../services/fileReader";
 import { analyzeCode } from "../services/gemini";
 import { buildOpenApi } from "../services/openapi";
 import { detectPort } from "../services/portDetector";
@@ -48,10 +48,15 @@ router.post("/files", (req: Request, res: Response) => {
   }
 
   try {
-    const files = readProjectFiles(projectPath);
+    const { files, found, truncated } = readProjectFilesCapped(projectPath);
     // the scan modal fills its base url box from this, so the user confirms a
     // port rather than being asked to remember one
-    res.json({ filesScanned: files.length, detectedPort: detectPort(projectPath, files) });
+    res.json({
+      filesScanned: files.length,
+      filesFound: found,
+      truncated,
+      detectedPort: detectPort(projectPath, files),
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -81,7 +86,7 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   try {
-    const files = readProjectFiles(projectPath);
+    const { files, found, truncated } = readProjectFilesCapped(projectPath);
 
     if (files.length === 0) {
       return res.status(404).json({ error: "no route files found in that directory" });
@@ -94,6 +99,8 @@ router.post("/", async (req: Request, res: Response) => {
       return res.json({
         routes: hit.routes,
         filesScanned: hit.filesScanned,
+        filesFound: found,
+        truncated,
         cached: true,
       });
     }
@@ -106,7 +113,7 @@ router.post("/", async (req: Request, res: Response) => {
       at: Date.now(),
     });
 
-    res.json({ routes, filesScanned: files.length, cached: false });
+    res.json({ routes, filesScanned: files.length, filesFound: found, truncated, cached: false });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

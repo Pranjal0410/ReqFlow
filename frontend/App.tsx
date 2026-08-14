@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { View, StyleSheet, StatusBar, Platform } from "react-native";
 import Sidebar from "./src/components/Sidebar";
 import TopBar from "./src/components/TopBar";
-import AiAgent, {
+import AiAgent, { 
   AgentRequestDraft,
   AgentAssertion,
   AgentSentRequest,

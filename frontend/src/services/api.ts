@@ -24,10 +24,17 @@ export interface DetectedPort {
 // path is right and fill in the base url before anything is spent
 export async function probeProject(projectPath: string): Promise<{
   filesScanned: number;
+  filesFound: number;
+  truncated: boolean;
   detectedPort: DetectedPort | null;
 }> {
   const res = await axios.post(`${BASE}/analyze/files`, { projectPath });
-  return { filesScanned: res.data.filesScanned, detectedPort: res.data.detectedPort ?? null };
+  return {
+    filesScanned: res.data.filesScanned,
+    filesFound: res.data.filesFound ?? res.data.filesScanned,
+    truncated: !!res.data.truncated,
+    detectedPort: res.data.detectedPort ?? null,
+  };
 }
 
 // is the server we are about to call actually up? the proxy reports status 0

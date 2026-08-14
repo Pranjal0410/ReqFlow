@@ -1,4 +1,5 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 
 const SKIP_DIRS = ["node_modules", ".git", "dist", "build", ".expo"];
@@ -32,7 +33,48 @@ function walkDir(dir: string, files: string[] = []): string[] {
   return files;
 }
 
-export function readProjectFiles(projectPath: string): { path: string; content: string }[] {
+// Pointing at a home folder rather than a project turns up thousands of files.
+// Concatenating those produced an 800MB prompt, which is not a slow scan, it is
+// a backend that stops responding. The cap is on what gets sent; the caller is
+// told how much was left out so the result is never passed off as complete.
+export const MAX_SCAN_FILES = 300;
+export const MAX_SCAN_CHARS = 500_000;
+
+export interface ProjectFiles {
+  files: { path: string; content: string }[];
+  // how many matched before the cap, so a partial scan can say so
+  found: number;
+  truncated: boolean;
+}
+
+export function readProjectFilesCapped(projectPath: string): ProjectFiles {
+  const all = readProjectFiles(projectPath);
+
+  const files: { path: string; content: string }[] = [];
+  let chars = 0;
+  for (const file of all) {
+    if (files.length >= MAX_SCAN_FILES) break;
+    // one oversized file, a bundle or a minified vendor blob, used to stop the
+    // loop dead and leave the scan with nothing. skip it and keep going.
+    if (chars + file.content.length > MAX_SCAN_CHARS) continue;
+    files.push(file);
+    chars += file.content.length;
+  }
+
+  return { files, found: all.length, truncated: files.length < all.length };
+}
+
+// "~/projects/api" is what gets typed and pasted, and only a shell expands it
+export function expandHome(input: string): string {
+  const text = input.trim();
+  if (text === "~") return os.homedir();
+  if (text.startsWith("~/")) return path.join(os.homedir(), text.slice(2));
+  return text;
+}
+
+export function readProjectFiles(rawPath: string): { path: string; content: string }[] {
+  const projectPath = expandHome(rawPath);
+
   if (!fs.existsSync(projectPath)) {
     throw new Error(`path not found: ${projectPath}`);
   }

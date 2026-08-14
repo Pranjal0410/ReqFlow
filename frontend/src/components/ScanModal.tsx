@@ -30,6 +30,7 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
   const [baseUrlTouched, setBaseUrlTouched] = React.useState(false);
 
   const [filesFound, setFilesFound] = React.useState<number | null>(null);
+  const [filesTotal, setFilesTotal] = React.useState<number | null>(null);
   const [detected, setDetected] = React.useState<DetectedPort | null>(null);
   const [probing, setProbing] = React.useState(false);
   const [probeError, setProbeError] = React.useState<string | null>(null);
@@ -41,6 +42,7 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
     const path = projectPath.trim();
     if (!visible || !path) {
       setFilesFound(null);
+      setFilesTotal(null);
       setDetected(null);
       setProbeError(null);
       return;
@@ -53,6 +55,7 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
         const result = await probeProject(path);
         if (cancelled) return;
         setFilesFound(result.filesScanned);
+        setFilesTotal(result.truncated ? result.filesFound : null);
         setDetected(result.detectedPort);
         setProbeError(null);
         if (result.detectedPort && !baseUrlTouched) {
@@ -61,6 +64,7 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
       } catch (err: any) {
         if (cancelled) return;
         setFilesFound(null);
+        setFilesTotal(null);
         setDetected(null);
         setProbeError(err?.response?.data?.error || "could not read that folder");
       } finally {
@@ -141,9 +145,18 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
 
           {probing && <Text style={styles.probe}>reading folder...</Text>}
           {!probing && probeError && <Text style={styles.probeBad}>{probeError}</Text>}
-          {!probing && filesFound !== null && (
+          {!probing && filesFound !== null && filesTotal === null && (
             <Text style={styles.probe}>
               {filesFound} route file{filesFound === 1 ? "" : "s"} found
+            </Text>
+          )}
+
+          {/* a partial scan read as a complete one would be worse than no scan,
+              so the numbers are both shown */}
+          {!probing && filesTotal !== null && (
+            <Text style={styles.probeBad}>
+              {filesTotal} route files here, only the first {filesFound} can be scanned. Point at
+              one project rather than a folder of them.
             </Text>
           )}
 

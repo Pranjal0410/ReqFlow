@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { expandHome } from "./fileReader";
 
 // Where a project says it listens. Asking the user for a base url and leaving
 // the box empty is how every scanned route ends up pointed at the wrong server,
@@ -76,8 +77,9 @@ function fromSource(files: { path: string; content: string }[]): DetectedPort | 
 }
 
 export function detectPort(
-  projectPath: string,
+  rawPath: string,
   files: { path: string; content: string }[]
 ): DetectedPort | null {
+  const projectPath = expandHome(rawPath);
   return fromEnvFile(projectPath) || fromPackageScripts(projectPath) || fromSource(files);
 }

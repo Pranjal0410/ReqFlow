@@ -2,7 +2,26 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
-const SKIP_DIRS = ["node_modules", ".git", "dist", "build", ".expo"];
+// Compiled output looks like source to a walk: a .next chunk mentions Route and
+// router and is a .js file. Pointed at a Next.js project, every one of the 18
+// files the scan sent to the model was a webpack chunk and none of them was
+// anything the developer had written.
+const SKIP_DIRS = [
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "out",
+  ".expo",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".cache",
+  "coverage",
+  ".venv",
+  "venv",
+];
 
 // what makes a file look like it defines routes
 const ROUTE_KEYWORDS = ["router", "app.get", "app.post", "app.put", "app.delete", "express", "Route"];

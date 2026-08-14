@@ -25,6 +25,20 @@ function joinAll(generated: GeneratedEndpoint): string {
     .join("\n\n");
 }
 
+// The layers a project turned out not to have. Saying so is the difference
+// between "we looked and there is no controller here" and a reader assuming a
+// controller was quietly forgotten. Nothing is generated for these, because a
+// layer the project does not use is one the developer would have to delete.
+const STANDARD_LAYERS = ["router", "controller", "service"];
+
+function describeGap(missing: string[]): string {
+  const named =
+    missing.length === 1
+      ? `${missing[0]} layer`
+      : `${missing.slice(0, -1).join(", ")} or ${missing[missing.length - 1]} layers`;
+  return `no ${named} in this project, so none was invented`;
+}
+
 export default function CodeView({ visible, generated, onClose, onOpenRequest }: Props) {
   const [active, setActive] = React.useState(0);
   const [copied, setCopied] = React.useState<string | null>(null);
@@ -54,6 +68,12 @@ export default function CodeView({ visible, generated, onClose, onOpenRequest }:
     }
     setTimeout(() => setCopied(null), 1600);
   };
+
+  const missing = React.useMemo(() => {
+    if (!generated) return [];
+    const found = new Set(generated.references.map((r) => r.layer));
+    return STANDARD_LAYERS.filter((l) => !found.has(l));
+  }, [generated]);
 
   if (!generated) return null;
 
@@ -87,6 +107,10 @@ export default function CodeView({ visible, generated, onClose, onOpenRequest }:
               style read from {generated.references.map((r) => r.path).join(", ")}
             </Text>
           )}
+
+          {/* a project with two layers gets two tabs, and without this line
+              that reads as a third one having gone missing */}
+          {missing.length > 0 && <Text style={styles.gap}>{describeGap(missing)}</Text>}
 
           <View style={styles.tabs}>
             {generated.layers.map((l, i) => (
@@ -245,6 +269,12 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontFamily: "monospace",
     marginTop: 6,
+  },
+  gap: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontFamily: "monospace",
+    marginTop: 3,
   },
   tabs: {
     flexDirection: "row",

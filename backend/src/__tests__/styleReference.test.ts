@@ -170,3 +170,84 @@ describe("pickStyleReferences", () => {
     expect(router.content.length).toBeLessThan(13_000);
   });
 });
+
+// A project names its layers however it likes, and the rule is only useful if
+// an unfamiliar name leaves a gap rather than filling it with the wrong file.
+describe("pickStyleReferences across naming conventions", () => {
+  const ROUTER_FILE = ROUTER;
+  const HANDLER_FILE = CONTROLLER;
+  const SERVICE_FILE = SERVICE;
+
+  it("reads handlers/ as the controller layer", () => {
+    const dir = project({
+      "src/routes/users.js": ROUTER_FILE,
+      "src/handlers/users.js": HANDLER_FILE,
+    });
+    expect(pick(dir).controller).toBe("src/handlers/users.js");
+  });
+
+  it("finds layers nested under api/v1", () => {
+    const dir = project({
+      "src/api/v1/routes/users.js": ROUTER_FILE,
+      "src/api/v1/controllers/users.js": HANDLER_FILE,
+      "src/api/v1/services/users.js": SERVICE_FILE,
+    });
+    expect(pick(dir)).toEqual({
+      router: "src/api/v1/routes/users.js",
+      controller: "src/api/v1/controllers/users.js",
+      service: "src/api/v1/services/users.js",
+    });
+  });
+
+  it("reads the nest style, where the layer is in the filename", () => {
+    const dir = project({
+      "src/users/users.controller.ts": HANDLER_FILE,
+      "src/users/users.service.ts": SERVICE_FILE,
+    });
+    const picked = pick(dir);
+    expect(picked.controller).toBe("src/users/users.controller.ts");
+    expect(picked.service).toBe("src/users/users.service.ts");
+  });
+
+  it("recognises usecases/ as the service layer", () => {
+    const dir = project({ "routes/users.js": ROUTER_FILE, "usecases/users.js": SERVICE_FILE });
+    expect(pick(dir).service).toBe("usecases/users.js");
+  });
+
+  // The case the whole rule exists for. A router is still found, because
+  // router.get() says what the file is wherever it sits; the other two are
+  // left blank rather than filled with the nearest plausible file.
+  it("leaves the named layers blank when a project invents its own names", () => {
+    const dir = project({ "transport/users.js": ROUTER_FILE, "logic/users.js": SERVICE_FILE });
+    const picked = pick(dir);
+
+    expect(picked.router).toBe("transport/users.js");
+    expect(picked.controller).toBeUndefined();
+    expect(picked.service).toBeUndefined();
+  });
+
+  // separately from naming, a directory that is plainly the frontend is not
+  // read at all, whatever its files are called
+  it("skips a frontend tree even when it names its layers correctly", () => {
+    const dir = project({
+      "web/routes/users.js": ROUTER_FILE,
+      "web/services/users.js": SERVICE_FILE,
+    });
+
+    expect(pickStyleReferences(dir).references).toHaveLength(0);
+  });
+
+  // compiled output is javascript, mentions Route and router, and is the last
+  // thing a generator should imitate
+  it("ignores a framework's build directory", () => {
+    const dir = project({
+      "app/services/mail.js": SERVICE_FILE,
+      ".next/server/chunks/route_actions_bf96.js": SERVICE_FILE,
+      "routes/users.js": ROUTER_FILE,
+    });
+    const picked = pick(dir);
+
+    expect(picked.service).toBe("app/services/mail.js");
+    expect(Object.values(picked).some((p) => p.includes(".next"))).toBe(false);
+  });
+});

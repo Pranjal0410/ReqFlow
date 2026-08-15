@@ -15,14 +15,32 @@ const STAGING = path.join(DESKTOP, "staging", "backend");
 
 const only = process.argv[2]; // backend | frontend | stage, or all of them
 
+// npm and npx are batch files on Windows, and execFile does not find those the
+// way a shell would
+const bin = (name) => (process.platform === "win32" ? `${name}.cmd` : name);
+
 function run(command, args, cwd) {
   console.log(`\n> ${command} ${args.join(" ")}   (in ${path.relative(ROOT, cwd) || "."})`);
-  execFileSync(command, args, { cwd, stdio: "inherit" });
+  execFileSync(bin(command), args, { cwd, stdio: "inherit" });
 }
 
+// du is not on Windows, and this is a line of build output rather than anything
+// load-bearing, so it is counted here instead of shelling out for it
 function size(dir) {
   if (!fs.existsSync(dir)) return "0";
-  return execFileSync("du", ["-sh", dir]).toString().split("\t")[0];
+
+  let bytes = 0;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    try {
+      bytes += fs.statSync(path.join(entry.parentPath || entry.path, entry.name)).size;
+    } catch {
+      // a link to nothing, or a file that went away mid-count
+    }
+  }
+
+  const mb = bytes / 1024 / 1024;
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}G` : `${Math.round(mb)}M`;
 }
 
 /* --------------------------------------------------------------- backend */

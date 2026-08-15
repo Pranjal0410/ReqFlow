@@ -7,12 +7,23 @@ import {
   MAX_SCAN_FILES,
   MAX_SCAN_CHARS,
   expandHome,
+  listSourceFiles,
+  UnreadableFolderError,
 } from "../services/fileReader";
 
 const tempDirs: string[] = [];
 
 afterAll(() => {
-  tempDirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
+  // a test that took a folder's permissions away has to give them back, or the
+  // folder cannot be deleted and the next run inherits it
+  tempDirs.forEach((d) => {
+    try {
+      fs.chmodSync(d, 0o755);
+    } catch {
+      // already gone, or never ours to change
+    }
+    fs.rmSync(d, { recursive: true, force: true });
+  });
 });
 
 function project(files: Record<string, string>): string {
@@ -171,6 +182,50 @@ describe("readProjectFilesCapped", () => {
     expect(out.files).toHaveLength(1);
     expect(out.files[0].path).toMatch(/b-small\.js$/);
     expect(out.truncated).toBe(true);
+  });
+});
+
+// A packaged Mac app asks the system before it may read Desktop, Documents or
+// Downloads, and a refusal used to arrive as an empty walk: nought route files,
+// reported as a project with no endpoints in it. That sends the user looking
+// for a fault in their code for something that is a permission they can grant.
+describe("a folder we are not allowed to read", () => {
+  // root is refused nothing, so there is no refusal to test for
+  const canTest = typeof process.getuid === "function" && process.getuid() !== 0;
+  const test = canTest ? it : it.skip;
+
+  const refused = () => {
+    const dir = project({ "routes/a.js": ROUTE_CODE });
+    fs.chmodSync(dir, 0o000);
+    return dir;
+  };
+
+  test("says so rather than reporting an empty project", () => {
+    const dir = refused();
+    expect(() => readProjectFilesCapped(dir)).toThrow(UnreadableFolderError);
+    expect(() => readProjectFilesCapped(dir)).toThrow(/not allowed to read/);
+  });
+
+  test("says so on the codegen path too, which reads the project for its style", () => {
+    expect(() => listSourceFiles(refused())).toThrow(UnreadableFolderError);
+  });
+
+  // One unreadable folder deep in a tree is not a reason to fail the scan of
+  // everything around it, which is a different case from being refused the
+  // folder the user actually pointed at.
+  test("still scans the rest when it is a subfolder that is closed", () => {
+    const dir = project({
+      "routes/a.js": ROUTE_CODE,
+      "private/b.js": ROUTE_CODE,
+    });
+    fs.chmodSync(path.join(dir, "private"), 0o000);
+
+    const out = readProjectFilesCapped(dir);
+
+    expect(out.files).toHaveLength(1);
+    expect(out.files[0].path).toMatch(/routes\/a\.js$/);
+
+    fs.chmodSync(path.join(dir, "private"), 0o755);
   });
 });
 

@@ -9,7 +9,19 @@ const path = require("path");
 // backend/.env is still read when it is there, so a developer who already has
 // the repo set up is never asked for a key they have already provided.
 
+// The key used to sit in that file in plain text, which is readable by anything
+// running as this user. macOS, Windows and Linux all have a keychain for
+// exactly this, and Electron's safeStorage is the one interface to all three,
+// so the key is encrypted with it and the ciphertext is what lands on disk.
+//
+// safeStorage is passed in rather than required, so this file stays testable
+// outside Electron — and so a Linux session with no keyring available can fall
+// back to the plain file rather than losing the ability to store a key at all.
+
 const KEY_NAME = "GEMINI_API_KEY";
+
+// not .env: nothing should try to parse this as text
+const SEALED_FILE = "gemini-key.enc";
 
 function parseEnv(text) {
   const out = {};
@@ -33,11 +45,39 @@ function userEnvPath(userDataDir) {
   return path.join(userDataDir, ".env");
 }
 
-// in order of how deliberate each one is: the environment beats the file the
-// app wrote, which beats the repo's own
-function readApiKey({ userDataDir, repoEnvPath }) {
+function sealedPath(userDataDir) {
+  return path.join(userDataDir, SEALED_FILE);
+}
+
+function canSeal(safeStorage) {
+  try {
+    return !!safeStorage && safeStorage.isEncryptionAvailable();
+  } catch {
+    return false;
+  }
+}
+
+function readSealed(userDataDir, safeStorage) {
+  if (!canSeal(safeStorage)) return null;
+  try {
+    const sealed = fs.readFileSync(sealedPath(userDataDir));
+    const key = safeStorage.decryptString(sealed).trim();
+    return key || null;
+  } catch {
+    // no file, or one this machine's keychain cannot open — either way there
+    // is no key here, and the caller has other places to look
+    return null;
+  }
+}
+
+// in order of how deliberate each one is: the environment beats the key the
+// app stored, which beats the repo's own
+function readApiKey({ userDataDir, repoEnvPath, safeStorage }) {
   const fromEnv = process.env[KEY_NAME];
   if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+
+  const sealed = readSealed(userDataDir, safeStorage);
+  if (sealed) return sealed;
 
   const fromUser = readEnvFile(userEnvPath(userDataDir))[KEY_NAME];
   if (fromUser) return fromUser;
@@ -46,8 +86,43 @@ function readApiKey({ userDataDir, repoEnvPath }) {
   return fromRepo || null;
 }
 
+// A key already sitting in the plain file is moved into the encrypted one and
+// removed from it. Doing this on the first launch after the change means an
+// existing install stops holding a readable credential without the user having
+// to be asked for it again.
+function sealExistingKey({ userDataDir, safeStorage }) {
+  if (!canSeal(safeStorage)) return null;
+
+  const file = userEnvPath(userDataDir);
+  const plain = readEnvFile(file)[KEY_NAME];
+  if (!plain) return null;
+
+  writeApiKey({ userDataDir, safeStorage }, plain);
+
+  // take out the one line, leaving anything else in the file alone
+  try {
+    const rest = fs
+      .readFileSync(file, "utf-8")
+      .split("\n")
+      .filter((line) => !new RegExp(`^\\s*${KEY_NAME}\\s*=`).test(line))
+      .join("\n")
+      .replace(/^\n+/, "");
+    if (rest.trim()) {
+      fs.writeFileSync(file, rest, { mode: 0o600 });
+    } else {
+      fs.rmSync(file);
+    }
+  } catch (err) {
+    // the key is safely stored either way; leaving the old copy is not worth
+    // failing a launch over, though it is worth knowing about
+    return { moved: true, removed: false, error: err.message };
+  }
+
+  return { moved: true, removed: true };
+}
+
 // rewrites just this one line, so anything else in the file survives
-function writeApiKey({ userDataDir }, key) {
+function writePlainApiKey({ userDataDir }, key) {
   const file = userEnvPath(userDataDir);
   const existing = fs.existsSync(file) ? fs.readFileSync(file, "utf-8") : "";
   const line = `${KEY_NAME}=${key.trim()}`;
@@ -59,6 +134,18 @@ function writeApiKey({ userDataDir }, key) {
   fs.mkdirSync(userDataDir, { recursive: true });
   // the file holds a credential, so it is not left world readable
   fs.writeFileSync(file, next, { mode: 0o600 });
+  return file;
+}
+
+// Encrypted where the platform offers it, and in the plain file where it does
+// not — a Linux session with no keyring is the case that has to keep working,
+// since refusing to store the key there would mean asking for it every launch.
+function writeApiKey({ userDataDir, safeStorage }, key) {
+  if (!canSeal(safeStorage)) return writePlainApiKey({ userDataDir }, key);
+
+  const file = sealedPath(userDataDir);
+  fs.mkdirSync(userDataDir, { recursive: true });
+  fs.writeFileSync(file, safeStorage.encryptString(key.trim()), { mode: 0o600 });
   return file;
 }
 
@@ -82,4 +169,12 @@ function looksLikeKey(value) {
   return true;
 }
 
-module.exports = { readApiKey, writeApiKey, looksLikeKey, userEnvPath, KEY_NAME };
+module.exports = {
+  readApiKey,
+  writeApiKey,
+  sealExistingKey,
+  looksLikeKey,
+  userEnvPath,
+  sealedPath,
+  KEY_NAME,
+};

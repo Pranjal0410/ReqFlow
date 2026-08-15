@@ -1,6 +1,7 @@
 # ReqFlow desktop
 
-ReqFlow as a double-clickable Mac app. Electron is a wrapper and nothing else:
+ReqFlow as a double-clickable app, on macOS, Windows and Linux. Electron is a
+wrapper and nothing else:
 the Express backend is the same server `npm run dev` starts, and the window
 shows the same web build Expo produces. Neither one knows it is being hosted,
 and both still run on their own exactly as before.
@@ -27,6 +28,45 @@ That compiles the backend, stages its production dependencies, exports the web
 build, and hands the lot to electron-builder. The disk image lands in
 `desktop/build/`.
 
+### The other platforms
+
+```bash
+npm run build:win      # NSIS installer, x64
+npm run build:linux    # AppImage, x64
+```
+
+Both can be built from a Mac: the staged backend is plain JavaScript with no
+native modules in it, so the same files ship everywhere, and electron-builder
+fetches the Windows and Linux Electron binaries itself. The Windows installer
+needs wine, which electron-builder downloads on first use.
+
+## Opening it the first time
+
+The app is not signed by an Apple Developer account, so macOS will not open it
+on a double click. The first open is:
+
+1. Drag **ReqFlow** from the disk image into Applications.
+2. **Right-click it → Open**, then **Open** again in the box that appears.
+
+Double-clicking gives "ReqFlow can't be opened because Apple cannot check it for
+malicious software" with no way past it. Right-click → Open offers the same
+message *with* an Open button, and macOS remembers the decision — every launch
+after the first is an ordinary double click.
+
+If it was downloaded rather than built locally and macOS says the app is
+**damaged**, that is quarantine plus an unsigned bundle rather than a real
+corruption:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ReqFlow.app
+```
+
+The build ad-hoc signs the bundle (`scripts/adhocSign.js`) for this reason.
+Electron's binary ships linker-signed, and leaving that alone produces a bundle
+whose signature promises sealed resources it does not have — which macOS reads
+as tampering, not as an unsigned app, and refuses outright rather than offering
+the right-click way through.
+
 ## How it fits together
 
 **The backend runs as a child process** on port 4000, spawned with
@@ -35,10 +75,18 @@ cannot rely on a system Node being installed. Closing the window stops it:
 leaving it running would hold port 4000 and the next launch would silently talk
 to a server the user thought they had closed.
 
-If something is *already* answering on 4000 when the app starts, that server is
-adopted rather than replaced, and is left running on quit. That is almost always
-your own `npm run dev`, and killing it would be taking down something this app
-did not start.
+If something is *already* answering on 4000 when the app starts, the app asks it
+who it is: `/health` returns `{ "status": "running", "app": "reqflow", ... }`,
+and only that answer counts. A server that names itself is adopted rather than
+replaced, and left running on quit — that is almost always your own
+`npm run dev`, and killing it would be taking down something this app did not
+start. Anything else holding the port is a stranger, and the app says so and
+offers to quit rather than adopting it: a request the user thinks is going to
+their project, going somewhere else, is worse than not starting.
+
+**Only one copy runs at a time.** Opening ReqFlow while it is already open
+raises the window that is there. Two windows cannot share one backend sensibly:
+quitting either of them would take the server out from under the other.
 
 **The frontend is served over http**, not loaded from `file://`. The Expo export
 references its bundle as `/_expo/static/js/...`, an absolute path, which under
@@ -49,12 +97,38 @@ having: the renderer gets a real hostname, so
 `window.location.hostname` on web — points at `localhost:4000` without being
 changed. The `DEV_IP` in that file is still only used by the native builds.
 
-**The Gemini key** is read from the environment, then from
-`~/Library/Application Support/reqflow-desktop/.env`, then from `backend/.env`.
-The last of those means a developer with the repo already set up is never asked
-for a key they have already provided. If none of the three has one, the first
-launch asks, and stores it in the second. It cannot be stored inside the app
-itself: a packaged `.app` is read-only and, once signed, tamper-evident.
+**If the backend dies it is restarted**, up to three times a minute, without
+the window being told: to the page it is a few failed requests rather than a
+session that has to be started again. Past that it stops trying and says so,
+because a server that will not stay up is not something to keep hiding. Its
+output goes to a log file either way — `backend.log`, with the previous run
+kept alongside it as `backend.previous.log`, under:
+
+```
+macOS    ~/Library/Logs/reqflow-desktop/
+Windows  %APPDATA%\reqflow-desktop\logs\
+Linux    ~/.config/reqflow-desktop/logs/
+```
+
+A packaged app has no console to print to, so without that file a crash leaves
+nothing behind to read.
+
+**The Gemini key** is read from the environment, then from the encrypted store
+the app writes, then from `backend/.env`. The last of those means a developer
+with the repo already set up is never asked for a key they have already
+provided. If none of the three has one, the first launch asks.
+
+It is encrypted with Electron's `safeStorage`, which is the keychain on macOS,
+DPAPI on Windows and the desktop keyring on Linux — so what lands on disk is
+ciphertext rather than a credential any process running as this user could
+read. A session with no keyring available (which happens on Linux) falls back
+to a `.env` file with owner-only permissions, because refusing to store the key
+at all would mean asking for it on every launch. An install that already had a
+plain-text key has it moved into the encrypted store on the next launch, and
+the plain copy removed.
+
+The key cannot be stored inside the app itself: a packaged `.app` is read-only
+and, once signed, tamper-evident.
 
 The prompt can be skipped. The request builder, the proxy, variables,
 assertions and timing history all work without a key; only the project scan and
@@ -68,25 +142,29 @@ desktop/
   preload.js           the key prompt's only bridge; the app window gets none
   key-prompt.html      first-launch key entry
   lib/
-    backend.js         spawn, health-poll, adopt, stop
+    backend.js         spawn, health-poll, adopt, restart, stop
     staticServer.js    serves frontend/dist over http
-    apiKey.js          read and write the key
+    apiKey.js          read and write the key, encrypted where it can be
   scripts/
     build.js           backend compile, dependency staging, web export
     prepare.js         builds only what is missing, for npm run start
+    adhocSign.js       ad-hoc signs the packaged app, so macOS calls it
+                       unsigned rather than damaged
   build/               electron-builder output, not committed
   staging/             production-only copy of the backend, not committed
 ```
 
 ## Known limitations
 
-- **macOS arm64 only** as configured. `package.json` targets a `dmg` for
-  `arm64`; an Intel or Windows build means adding targets there.
-- **Unsigned.** Without an Apple Developer certificate the app is ad-hoc signed,
-  so the first open needs right-click → Open, or Gatekeeper will refuse it.
-  Distributing it properly means signing and notarising.
+- **Only the Mac build is signed at all**, ad-hoc. The Windows installer is
+  unsigned too, so SmartScreen shows "Windows protected your PC" and needs
+  More info → Run anyway.
+- **Unsigned.** The app is ad-hoc signed, which is enough to be opened by
+  right-click → Open but not enough to be opened by a double click, and it will
+  never be until it is signed with an Apple Developer certificate and notarised.
+  See "Opening it the first time" above.
 - **Port 4000 is fixed**, because the frontend's config hardcodes it too.
-  If another program holds it and is not ReqFlow, the app says so and exits
-  rather than starting half-working.
+  If another program holds it and is not ReqFlow, the app says so and offers to
+  quit rather than starting half-working.
 - **The window is a browser**, so DevTools, zoom and text selection behave the
   way they do on the web, not the way a native Mac app would.

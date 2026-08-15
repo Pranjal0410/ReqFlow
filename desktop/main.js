@@ -1,10 +1,16 @@
 const path = require("path");
 const fs = require("fs");
-const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, shell, safeStorage } = require("electron");
 
 const { startStaticServer } = require("./lib/staticServer");
 const { Backend, PORT } = require("./lib/backend");
-const { readApiKey, writeApiKey, looksLikeKey, userEnvPath } = require("./lib/apiKey");
+const {
+  readApiKey,
+  writeApiKey,
+  sealExistingKey,
+  looksLikeKey,
+  userEnvPath,
+} = require("./lib/apiKey");
 
 // ReqFlow as a double-clickable app. Electron is a wrapper and nothing more:
 // the Express server is the same one npm run dev starts, and the window shows
@@ -26,9 +32,18 @@ const RESOURCES = app.isPackaged
       repoEnv: path.join(__dirname, "..", "backend", ".env"),
     };
 
+// Two copies of ReqFlow cannot both have port 4000. The second one used to
+// find the first one's server, adopt it, and open a window onto it — two
+// windows over one backend, and quitting either took the server with it. So
+// only one instance runs, and opening the app again raises the window that is
+// already there.
+const gotTheLock = app.requestSingleInstanceLock();
+
 const backend = new Backend();
 let staticServer = null;
 let mainWindow = null;
+// where the backend's output is being kept, so a message about it can say
+let logFile = null;
 // set while quitting, so the teardown that runs on window close does not also
 // run from the quit handler
 let shuttingDown = false;
@@ -75,7 +90,7 @@ function askForApiKey() {
         return { ok: false, error: "paste the key on its own — no spaces, and not the whole KEY=value line" };
       }
       try {
-        writeApiKey({ userDataDir: app.getPath("userData") }, key);
+        writeApiKey({ userDataDir: app.getPath("userData"), safeStorage }, key);
         return { ok: true };
       } catch (err) {
         return { ok: false, error: `could not save it: ${err.message}` };
@@ -131,6 +146,42 @@ function createWindow(url) {
 
 /* ------------------------------------------------------------- lifecycle */
 
+// Asked only when port 4000 answers as something other than ReqFlow. Carrying
+// on is offered because the guess can be wrong — an older ReqFlow build whose
+// health endpoint does not name itself answers the same way as a stranger —
+// but quitting is the default, since the alternative is a backend that cannot
+// listen.
+async function askAboutPortConflict() {
+  const { response } = await dialog.showMessageBox({
+    type: "warning",
+    title: "ReqFlow",
+    message: `Port ${PORT} is already in use.`,
+    detail:
+      `Something that is not ReqFlow's backend is listening on port ${PORT}. ` +
+      `ReqFlow cannot start its own server while it is there.\n\n` +
+      `Stop that program and open ReqFlow again, or start anyway to see what the backend reports.`,
+    buttons: ["Quit", "Start Anyway"],
+    defaultId: 0,
+    cancelId: 0,
+  });
+  return response === 1;
+}
+
+// The backend is restarted quietly when it dies, because a server that comes
+// back within a second is not something the user needs to be told about. This
+// is for when it will not stay up: at that point the window is a page whose
+// every request fails, and saying nothing would leave them to work that out.
+function reportBackendGaveUp(message) {
+  console.error(`[desktop] ${message}`);
+  dialog.showMessageBox({
+    type: "error",
+    title: "ReqFlow",
+    message: "ReqFlow's backend keeps stopping.",
+    detail: `${message}\n\nQuit and open ReqFlow again. The full log is at:\n${logFile || "(no log file)"}`,
+    buttons: ["OK"],
+  });
+}
+
 async function boot() {
   const missing = missingBuild();
   if (missing) {
@@ -142,14 +193,36 @@ async function boot() {
     return;
   }
 
+  // an install from before the key was encrypted still has it in plain text,
+  // and this is the launch that moves it
+  const moved = sealExistingKey({ userDataDir: app.getPath("userData"), safeStorage });
+  if (moved?.moved) {
+    console.log(
+      moved.removed
+        ? "[desktop] moved the stored key into the system keychain"
+        : `[desktop] stored the key in the system keychain, but could not remove the plain copy: ${moved.error}`
+    );
+  }
+
   const apiKey = readApiKey({
     userDataDir: app.getPath("userData"),
     repoEnvPath: RESOURCES.repoEnv,
+    safeStorage,
   });
 
   // asked before the server starts, so the key is in place for the first
   // request rather than needing a restart to take effect
   if (!apiKey) await askForApiKey();
+
+  try {
+    // "logs" is a real place on all three platforms, but asking for a path
+    // Electron does not have on this one throws, and a launch is not worth
+    // losing over where the log goes
+    logFile = backend.openLog(app.getPath("logs"));
+    if (logFile) console.log(`[desktop] backend log: ${logFile}`);
+  } catch (err) {
+    console.error(`[desktop] no backend log this run: ${err.message}`);
+  }
 
   try {
     const { adopted } = await backend.start({
@@ -158,16 +231,23 @@ async function boot() {
       apiKey: readApiKey({
         userDataDir: app.getPath("userData"),
         repoEnvPath: RESOURCES.repoEnv,
+        safeStorage,
       }),
+      onConflict: askAboutPortConflict,
+      onGiveUp: reportBackendGaveUp,
     });
     if (adopted) {
       console.log(`[desktop] reusing the backend already listening on ${PORT}`);
     }
   } catch (err) {
-    dialog.showErrorBox(
-      "ReqFlow's backend would not start",
-      `${err.message}\n\nIf something else is using port ${PORT}, stop it and open ReqFlow again.`
-    );
+    // the conflict was already explained in its own dialog, and the user chose
+    // to quit rather than press on
+    if (err.code !== "PORT_CONFLICT") {
+      dialog.showErrorBox(
+        "ReqFlow's backend would not start",
+        `${err.message}\n\nIf something else is using port ${PORT}, stop it and open ReqFlow again.`
+      );
+    }
     app.quit();
     return;
   }
@@ -188,15 +268,28 @@ async function teardown() {
   if (staticServer) await staticServer.close();
 }
 
-app.whenReady()
-  .then(boot)
-  .catch((err) => {
-    // booting stays true until the window opens, so a failure here would
-    // otherwise leave an app that cannot be quit by closing anything
-    booting = false;
-    dialog.showErrorBox("ReqFlow could not start", String(err?.stack || err));
-    app.quit();
+if (!gotTheLock) {
+  // exit rather than quit: quit runs the teardown, and this instance owns
+  // nothing to tear down. The one already running does.
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
   });
+
+  app.whenReady()
+    .then(boot)
+    .catch((err) => {
+      // booting stays true until the window opens, so a failure here would
+      // otherwise leave an app that cannot be quit by closing anything
+      booting = false;
+      dialog.showErrorBox("ReqFlow could not start", String(err?.stack || err));
+      app.quit();
+    });
+}
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0 && staticServer) createWindow(staticServer.url);
@@ -225,5 +318,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 
 ipcMain.handle("open-external", (_event, url) => shell.openExternal(url));
 
-// where the key lives, printed once so it can be edited or removed by hand
-console.log(`[desktop] settings: ${userEnvPath(app.getPath("userData"))}`);
+// where the key lives, printed once so it can be replaced or removed by hand.
+// Encrypted, it is no longer a file to edit — deleting it is how you start over,
+// and the first launch after that asks for a key again.
+console.log(`[desktop] settings: ${path.dirname(userEnvPath(app.getPath("userData")))}`);

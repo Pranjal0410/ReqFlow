@@ -1,7 +1,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { readApiKey, writeApiKey, looksLikeKey, KEY_NAME } = require("../apiKey");
+const { readApiKey, writeApiKey, sealExistingKey, looksLikeKey, KEY_NAME } = require("../apiKey");
 
 const dirs = [];
 const tempDir = () => {
@@ -117,5 +117,103 @@ describe("writeApiKey", () => {
     const file = writeApiKey({ userDataDir }, "a-perfectly-good-key-00000");
 
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+});
+
+// Electron's safeStorage, standing in for the platform keychain. The real one
+// needs a running Electron app; what these tests are about is which file the
+// key ends up in and what is left behind in the other one, and that is the same
+// question either way.
+// The transform is nothing — the real one is the platform's — but it has to at
+// least not leave the key sitting in the file as itself, or the test that says
+// so proves nothing.
+const scramble = (buffer) => Buffer.from(buffer.map((byte) => byte ^ 0x5a));
+
+const keychain = {
+  isEncryptionAvailable: () => true,
+  encryptString: (text) => scramble(Buffer.from(text, "utf-8")),
+  decryptString: (buffer) => scramble(Buffer.from(buffer)).toString("utf-8"),
+};
+
+const noKeychain = { isEncryptionAvailable: () => false };
+
+// A session with no keyring at all — Linux without one running. Asking the
+// question must not throw the launch away.
+const brokenKeychain = {
+  isEncryptionAvailable: () => {
+    throw new Error("no keyring on this session");
+  },
+};
+
+describe("storing the key where the platform can keep it", () => {
+  const plainFile = (dir) => path.join(dir, ".env");
+
+  it("does not leave the key readable on disk", () => {
+    const userDataDir = tempDir();
+    const file = writeApiKey({ userDataDir, safeStorage: keychain }, "a-real-looking-key-000000");
+
+    expect(fs.readFileSync(file, "utf-8")).not.toContain("a-real-looking-key-000000");
+    expect(fs.existsSync(plainFile(userDataDir))).toBe(false);
+    expect(readApiKey({ userDataDir, safeStorage: keychain })).toBe("a-real-looking-key-000000");
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
+
+  it("still stores the key when the platform has nowhere to keep it", () => {
+    const userDataDir = tempDir();
+    writeApiKey({ userDataDir, safeStorage: noKeychain }, "a-real-looking-key-000000");
+
+    expect(readApiKey({ userDataDir, safeStorage: noKeychain })).toBe("a-real-looking-key-000000");
+  });
+
+  it("survives a keychain that throws when asked", () => {
+    const userDataDir = tempDir();
+    writeApiKey({ userDataDir, safeStorage: brokenKeychain }, "a-real-looking-key-000000");
+
+    expect(readApiKey({ userDataDir, safeStorage: brokenKeychain })).toBe(
+      "a-real-looking-key-000000"
+    );
+  });
+
+  // An install from before this existed has the key sitting in plain text. The
+  // point of moving it is that the plain copy stops existing, so a user who
+  // updates is not left with the thing this was meant to stop.
+  describe("an install that already has a plain key", () => {
+    it("moves it into the keychain and takes the plain copy away", () => {
+      const userDataDir = tempDir();
+      fs.writeFileSync(plainFile(userDataDir), `${KEY_NAME}=an-existing-key-000000000\n`);
+
+      expect(sealExistingKey({ userDataDir, safeStorage: keychain })).toMatchObject({
+        moved: true,
+        removed: true,
+      });
+      expect(fs.existsSync(plainFile(userDataDir))).toBe(false);
+      expect(readApiKey({ userDataDir, safeStorage: keychain })).toBe("an-existing-key-000000000");
+    });
+
+    it("leaves the rest of the file alone", () => {
+      const userDataDir = tempDir();
+      fs.writeFileSync(
+        plainFile(userDataDir),
+        `SOMETHING_ELSE=keep-me\n${KEY_NAME}=an-existing-key-000000000\n`
+      );
+
+      sealExistingKey({ userDataDir, safeStorage: keychain });
+
+      const left = fs.readFileSync(plainFile(userDataDir), "utf-8");
+      expect(left).toContain("SOMETHING_ELSE=keep-me");
+      expect(left).not.toContain("an-existing-key-000000000");
+    });
+
+    it("does nothing when there is nothing to move", () => {
+      expect(sealExistingKey({ userDataDir: tempDir(), safeStorage: keychain })).toBeNull();
+    });
+
+    it("does nothing when there is nowhere to move it to", () => {
+      const userDataDir = tempDir();
+      fs.writeFileSync(plainFile(userDataDir), `${KEY_NAME}=an-existing-key-000000000\n`);
+
+      expect(sealExistingKey({ userDataDir, safeStorage: noKeychain })).toBeNull();
+      expect(readApiKey({ userDataDir })).toBe("an-existing-key-000000000");
+    });
   });
 });

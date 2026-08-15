@@ -1,6 +1,6 @@
 import { Router, Request, Response } from "express";
 import crypto from "crypto";
-import { readProjectFilesCapped } from "../services/fileReader";
+import { readProjectFilesCapped, UnreadableFolderError } from "../services/fileReader";
 import { analyzeCode } from "../services/gemini";
 import { buildOpenApi } from "../services/openapi";
 import { detectPort } from "../services/portDetector";
@@ -21,6 +21,16 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>();
+
+// Being refused a folder is not a fault in the server, and a 500 says it is.
+// The distinction matters here because the message is the whole fix: it tells
+// the user which permission to grant, and a 500 reads as "ReqFlow is broken".
+function failed(res: Response, err: any) {
+  if (err instanceof UnreadableFolderError) {
+    return res.status(403).json({ error: err.message });
+  }
+  return res.status(500).json({ error: err.message });
+}
 
 // bumped when the analyze prompt changes, so a cached scan is not served with
 // answers the old prompt produced
@@ -58,7 +68,7 @@ router.post("/files", (req: Request, res: Response) => {
       detectedPort: detectPort(projectPath, files),
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    failed(res, err);
   }
 });
 
@@ -115,7 +125,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     res.json({ routes, filesScanned: files.length, filesFound: found, truncated, cached: false });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    failed(res, err);
   }
 });
 

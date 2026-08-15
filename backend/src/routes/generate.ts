@@ -1,5 +1,6 @@
 import { Router, Request, Response } from "express";
 import { generateEndpoint } from "../services/codegen";
+import { UnreadableFolderError } from "../services/fileReader";
 
 const router = Router();
 
@@ -20,7 +21,10 @@ router.post("/", async (req: Request, res: Response) => {
   try {
     res.json(await generateEndpoint(String(projectPath), String(description).trim()));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    // codegen reads the project to copy its style, so it meets the same refusal
+    // the scan does, and for the same reason it is not a server fault
+    const status = err instanceof UnreadableFolderError ? 403 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 

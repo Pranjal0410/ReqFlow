@@ -28,6 +28,18 @@ const SKIP_DIRS = [
 const ROUTE_KEYWORDS = ["router", "app.get", "app.post", "app.put", "app.delete", "express", "Route"];
 const VALID_EXT = [".js", ".ts", ".jsx", ".tsx"];
 
+// Thrown only for the folder the user actually pointed at. A subfolder we
+// cannot open is skipped as before, because one unreadable directory deep in a
+// tree should not fail the scan of everything around it.
+export class UnreadableFolderError extends Error {
+  constructor(folder: string) {
+    super(
+      `ReqFlow is not allowed to read ${folder}. On macOS, grant access under System Settings > Privacy & Security > Files and Folders, or pick a folder outside Desktop, Documents and Downloads.`
+    );
+    this.name = "UnreadableFolderError";
+  }
+}
+
 function walkDir(dir: string, files: string[] = []): string[] {
   let entries: fs.Dirent[];
   try {
@@ -85,6 +97,7 @@ export function readProjectFilesCapped(rawPath: string): ProjectFiles {
   if (!fs.existsSync(projectPath)) {
     throw new Error(`path not found: ${projectPath}`);
   }
+  assertReadable(projectPath);
 
   // read one at a time and keep only what fits. reading everything first and
   // trimming afterwards still built the whole 800MB in memory, which is what
@@ -118,6 +131,23 @@ export function readProjectFilesCapped(rawPath: string): ProjectFiles {
   return { files, found, truncated: files.length < found };
 }
 
+// A folder macOS has not granted access to reads as an empty folder: the walk
+// skips what it cannot open and the scan reports nought route files. That tells
+// the user their project has no endpoints in it, which is a different and much
+// more confusing thing than being told ReqFlow was refused.
+function assertReadable(projectPath: string): void {
+  try {
+    fs.accessSync(projectPath, fs.constants.R_OK | fs.constants.X_OK);
+    // a directory can pass access() and still refuse to be listed
+    fs.readdirSync(projectPath);
+  } catch (err: any) {
+    if (err?.code === "EACCES" || err?.code === "EPERM") {
+      throw new UnreadableFolderError(projectPath);
+    }
+    throw err;
+  }
+}
+
 // the codegen path ranks files by their name before deciding which ones are
 // worth opening, so it needs the walk without the reading that follows it
 export function listSourceFiles(rawPath: string): string[] {
@@ -125,6 +155,7 @@ export function listSourceFiles(rawPath: string): string[] {
   if (!fs.existsSync(projectPath)) {
     throw new Error(`path not found: ${projectPath}`);
   }
+  assertReadable(projectPath);
   return walkDir(projectPath).slice(0, MAX_SCAN_EXAMINE);
 }
 

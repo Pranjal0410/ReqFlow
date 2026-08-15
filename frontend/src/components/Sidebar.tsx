@@ -10,7 +10,7 @@ import {
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
-import { DetectedRoute, HistoryEntry } from "../types";
+import { DetectedRoute, HistoryEntry, GeneratedRoute } from "../types";
 import { Variable, isSecretVariable } from "../lib/variables";
 import * as Clipboard from "expo-clipboard";
 
@@ -27,6 +27,10 @@ interface Props {
   variables: Variable[];
   onVariablesChange: (vars: Variable[]) => void;
   onExportOpenApi: () => Promise<string>;
+  // endpoints the agent wrote that the project does not have yet
+  generatedRoutes: GeneratedRoute[];
+  onSelectGenerated: (route: GeneratedRoute) => void;
+  onClearGenerated: () => void;
 }
 
 export default function Sidebar({
@@ -42,6 +46,9 @@ export default function Sidebar({
   variables,
   onVariablesChange,
   onExportOpenApi,
+  generatedRoutes,
+  onSelectGenerated,
+  onClearGenerated,
 }: Props) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [confirmReset, setConfirmReset] = React.useState(false);
@@ -60,11 +67,13 @@ export default function Sidebar({
     setTimeout(() => setSpecCopied(null), 2200);
   };
 
-  const filtered = routes.filter(
-    (r) =>
-      r.path.toLowerCase().includes(search.toLowerCase()) ||
-      r.method.toLowerCase().includes(search.toLowerCase())
-  );
+  const matches = (method: string, path: string) => {
+    const needle = search.toLowerCase();
+    return path.toLowerCase().includes(needle) || method.toLowerCase().includes(needle);
+  };
+
+  const filtered = routes.filter((r) => matches(r.method, r.path));
+  const filteredGenerated = generatedRoutes.filter((g) => matches(g.method, g.path));
 
   // group routes by first path segment
   const grouped: Record<string, DetectedRoute[]> = {};
@@ -251,7 +260,65 @@ export default function Sidebar({
           </View>
         ))}
 
-        {routes.length === 0 && (
+        {/* Endpoints the agent wrote code for. They are kept out of the list
+            above because the project does not serve them yet: shown among the
+            scanned routes with nothing to tell them apart, they would read as
+            endpoints that are already there. */}
+        {filteredGenerated.length > 0 && (
+          <View>
+            <View style={styles.groupHeader}>
+              <Text style={styles.groupTitle}>Generated</Text>
+              <View style={styles.generatedHeaderRight}>
+                <Text style={styles.groupCount}>{filteredGenerated.length}</Text>
+                <Pressable
+                  style={({ hovered: h }: any) => [styles.clearGenerated, h && styles.routeItemHover]}
+                  onPress={onClearGenerated}
+                >
+                  <Icon name="close" size={11} color={colors.textDim} />
+                </Pressable>
+              </View>
+            </View>
+
+            <Text style={styles.generatedNote}>not in the project yet</Text>
+
+            {filteredGenerated.map((route) => (
+              <Pressable
+                key={`${route.method} ${route.path}`}
+                style={({ hovered: h, pressed }: any) => [
+                  styles.routeItem,
+                  (h || pressed) && styles.routeItemHover,
+                ]}
+                onPress={() => onSelectGenerated(route)}
+              >
+                {/* the method keeps its colour: it is still a GET or a POST,
+                    and the row is dimmed by the path and the tag instead */}
+                <Text
+                  style={[
+                    styles.method,
+                    { color: (colors.method as any)[route.method] || colors.text },
+                  ]}
+                >
+                  {route.method}
+                </Text>
+                <Text style={[styles.path, styles.generatedPath]} numberOfLines={1}>
+                  {route.path}
+                </Text>
+                {/* the same mark the agent panel carries, rather than the word
+                    "generated" spelled out: at this width the tag took enough
+                    of the row to cut the path down to "/api/incide…", and the
+                    path is the part being read */}
+                <View
+                  style={styles.generatedTag}
+                  accessibilityLabel="written by the agent, not in the project yet"
+                >
+                  <Icon name="sparkle" size={10} color={colors.textDim} />
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {routes.length === 0 && generatedRoutes.length === 0 && (
           <View style={styles.empty}>
             <Icon name="search" size={22} color={colors.textDim} />
             <Text style={styles.emptyTitle}>No endpoints yet</Text>
@@ -301,7 +368,7 @@ export default function Sidebar({
           </View>
         )}
 
-        {routes.length > 0 && filtered.length === 0 && (
+        {routes.length > 0 && filtered.length === 0 && filteredGenerated.length === 0 && (
           <View style={styles.empty}>
             <Icon name="search" size={22} color={colors.textDim} />
             <Text style={styles.emptyTitle}>No matches</Text>
@@ -558,6 +625,38 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 11,
     lineHeight: 16,
+  },
+  generatedHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  clearGenerated: {
+    padding: 3,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  generatedNote: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontStyle: "italic",
+    paddingHorizontal: 8,
+    marginBottom: 2,
+  },
+  generatedPath: {
+    // dimmer than a scanned route, because this one is a suggestion and the
+    // list has to say which is which without being read closely
+    color: colors.textDim,
+    opacity: 0.75,
+  },
+  generatedTag: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    paddingHorizontal: 3,
+    paddingVertical: 2,
+    marginLeft: 6,
+    flexShrink: 0,
   },
   historyBlock: {
     marginTop: 6,

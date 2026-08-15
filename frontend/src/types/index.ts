@@ -76,6 +76,20 @@ export interface GeneratedLayer {
   code: string;
 }
 
+// An endpoint the agent drafted a request for that the scan has not found in
+// the project. Held only for the session: these are suggestions, and one that
+// survived a restart would be indistinguishable from an endpoint that exists.
+export interface GeneratedRoute {
+  method: string;
+  // taken off the url, for reading and for comparing against the scan
+  path: string;
+  url: string;
+  label: string;
+  // the tab the agent already opened for it, so clicking the row goes back to
+  // that request instead of stacking another copy of it
+  tabId: string;
+}
+
 export interface GeneratedEndpoint {
   method: string;
   path: string;

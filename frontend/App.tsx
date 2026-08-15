@@ -20,13 +20,20 @@ import {
   checkTarget,
   exportOpenApi,
 } from "./src/services/api";
-import { DetectedRoute, RequestTab, HistoryEntry, GeneratedEndpoint } from "./src/types";
+import {
+  DetectedRoute,
+  RequestTab,
+  HistoryEntry,
+  GeneratedEndpoint,
+  GeneratedRoute,
+} from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
 import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
 import { Variable, toMap, substitute } from "./src/lib/variables";
 import { withScheme, originOf } from "./src/lib/url";
+import { addGenerated, pruneGenerated, toGeneratedRoute } from "./src/lib/generatedRoutes";
 import { applyPathParams } from "./src/lib/pathParams";
 import {
   TimingHistory,
@@ -74,6 +81,11 @@ export default function App() {
   // than shown once, so the log row in the chat can bring it back.
   const [generated, setGenerated] = useState<GeneratedEndpoint | null>(null);
   const [showCode, setShowCode] = useState(false);
+  // endpoints the agent drafted that the scan has not found. deliberately not
+  // in the saved workspace: they are suggestions about code that does not
+  // exist yet, and one that came back after a restart would look like a real
+  // endpoint the project had all along.
+  const [generatedRoutes, setGeneratedRoutes] = useState<GeneratedRoute[]>([]);
 
   // nothing is written back until the saved workspace has been read, otherwise
   // the empty first render would immediately overwrite it
@@ -244,6 +256,9 @@ export default function App() {
     try {
       const result = await analyzeProject(scannedPath);
       setRoutes(result.routes);
+      // a suggestion the user has since written into the project is no longer a
+      // suggestion, and the scan is how we find out
+      setGeneratedRoutes((prev) => pruneGenerated(prev, result.routes));
       setProjectName(scannedPath.split("/").pop() || "Project");
       setProjectPath(scannedPath);
       setBaseUrl(withScheme(scannedBaseUrl));
@@ -380,6 +395,7 @@ export default function App() {
     setProjectName("ReqFlow");
     setProjectPath("");
     setGenerated(null);
+    setGeneratedRoutes([]);
     setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
   };
@@ -418,7 +434,48 @@ export default function App() {
     ]);
     setActiveTabId(newTab.id);
     activeTabIdRef.current = newTab.id;
+
+    // and it goes in the sidebar, so the endpoint has somewhere to live once
+    // this tab is no longer the one in front of the user. Only when the scan
+    // does not already have it: the agent opens tabs for endpoints that exist
+    // too, and listing those as missing would be a lie about their own code.
+    setGeneratedRoutes((prev) =>
+      addGenerated(prev, toGeneratedRoute(draft, newTab.id), routes)
+    );
   };
+
+  // Back to the request the agent already opened for this endpoint, rather than
+  // a second tab drafting the same thing. If that tab has been closed since,
+  // the row reopens it — a click that does nothing at all is worse than one
+  // that brings the request back.
+  const handleSelectGenerated = (route: GeneratedRoute) => {
+    const existing = tabsRef.current.find((t) => t.id === route.tabId);
+    if (existing) {
+      setActiveTabId(existing.id);
+      activeTabIdRef.current = existing.id;
+      return;
+    }
+
+    const tab = createTab(baseUrl);
+    tab.method = route.method;
+    tab.url = route.url;
+    tab.label = route.label;
+
+    const next = [...tabsRef.current, tab];
+    setTabs(next);
+    tabsRef.current = next;
+    setActiveTabId(tab.id);
+    activeTabIdRef.current = tab.id;
+
+    // the row now points at the tab it just reopened
+    setGeneratedRoutes((prev) =>
+      prev.map((g) => (g.tabId === route.tabId ? { ...g, tabId: tab.id } : g))
+    );
+  };
+
+  // the suggestions go, the tabs stay: the requests in them may have been
+  // edited and sent, and closing those is a separate decision
+  const handleClearGenerated = () => setGeneratedRoutes([]);
 
   // whatever the agent sent lands in the workspace on its own, with the real
   // response already attached. re-running the request here instead would show
@@ -628,6 +685,9 @@ export default function App() {
           variables={variables}
           onVariablesChange={setVariables}
           onExportOpenApi={() => exportOpenApi(routes, projectName, baseUrl)}
+          generatedRoutes={generatedRoutes}
+          onSelectGenerated={handleSelectGenerated}
+          onClearGenerated={handleClearGenerated}
         />
 
         <View style={styles.center}>

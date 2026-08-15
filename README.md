@@ -8,7 +8,8 @@ and you can send requests to any of them. There is also an agent that runs the
 requests for you and drops each one into a tab with its real response.
 
 Built with Express and TypeScript on the backend, Expo and React Native on the
-frontend. It runs in the browser today and is meant to run on a phone too.
+frontend. It runs in the browser, and as a desktop app on macOS, Windows and
+Linux; it is meant to run on a phone too.
 
 ## What it does
 
@@ -71,7 +72,7 @@ authorised by hand.
 
 ## The agent
 
-It acts on what you ask without checking in first, and has four tools:
+It acts on what you ask without checking in first, and has five tools:
 
 | Tool | What it does |
 | --- | --- |
@@ -79,9 +80,30 @@ It acts on what you ask without checking in first, and has four tools:
 | `create_request` | Fills a tab and leaves it for you to send |
 | `create_assertions` | Writes checks into the Tests panel |
 | `set_variable` | Saves a value as `{{name}}` for every tab |
+| `generate_code` | Writes an endpoint the project does not have yet |
 
-Only the first touches the network, so the other three still work with read-only
-mode on. It works through login flows, so protected routes are fine.
+Only the first touches the network, so the rest still work with read-only mode
+on. It works through login flows, so protected routes are fine.
+
+**Writes endpoints in your project's own style.** Asked for one the project does
+not have, it reads the files it does have and writes the new route to match
+them, naming the files it took the style from so the claim can be checked. The
+code is shown for you to copy, never written into your files: putting code into
+someone's repository is a different decision from generating it, and not one
+this app makes.
+
+It opens a tab for the new endpoint too, and any tab it opens for a route the
+scan does not have is listed in the sidebar under **Generated** — apart from the
+scanned routes and dimmed, because the server does not serve them yet. A tab for
+an endpoint that does exist is not listed there, since saying your own code is
+missing something it has would be worse than saying nothing.
+
+Clicking one of those rows goes back to the tab the agent already opened rather
+than drafting a second copy of the same request. Scan the project again after
+pasting the code in and the endpoint moves up into the normal list, which is the
+sidebar noticing that the suggestion has become real. They last for the session
+only: one that came back after a restart would be indistinguishable from an
+endpoint that had been there all along.
 
 Everything it sends lands in a tab with the real response already attached,
 rather than being readable only in the chat column. Nothing is re-run to show you
@@ -135,11 +157,27 @@ networks cannot break it. Running on a device is the one case that needs an
 address written down, since `localhost` there is the phone: set `DEV_IP` in
 `frontend/src/config.ts`.
 
+### As a desktop app
+
+Both halves also run in one window, with no terminal and no key file to set up:
+
+```bash
+cd desktop
+npm install
+npm run start             # or npm run build for a .dmg
+```
+
+It is the same Express server and the same web build, wrapped in Electron and
+nothing more — neither knows it is being hosted, and both still run on their own
+exactly as above. `desktop/README.md` covers packaging, the first-open steps on
+macOS, and the Windows and Linux builds.
+
 ## Tests
 
 ```bash
-cd backend && npm test     # 85
-cd frontend && npm test    # 69
+cd backend && npm test     # 143
+cd frontend && npm test    # 93
+cd desktop && npm test     # 35
 ```
 
 The backend covers the proxy, the target guard, the analyze route and its cache,
@@ -148,20 +186,27 @@ agent's tools including the action cap. They spin up their own throwaway server 
 public API, and Gemini is mocked, so they run offline and cost nothing.
 
 The frontend suite is limited to `src/lib`: variables, query and path
-parameters, url normalisation and the timing comparison. Components would need a react-native renderer, which those
-files do not justify yet.
+parameters, url normalisation, the timing comparison, and which generated
+endpoints belong in the sidebar. Components would need a react-native renderer,
+which those files do not justify yet.
+
+The desktop suite covers what the wrapper adds: deciding whether the server on
+port 4000 is ours to adopt or a stranger to warn about, restarting a backend
+that dies, and where the API key is stored. Those bind the real port, so nothing
+else can be listening on 4000 while they run.
 
 ## How it is put together
 
 ```
 backend/
-  routes/      analyze, proxy, ai-chat
+  routes/      analyze, proxy, ai-chat, generate
   services/    fileReader, gemini, openapi, portDetector, proxy, serverTiming,
-               targetGuard
+               targetGuard, codegen, styleReference, frameworkRoutes
 frontend/
   components/  sidebar, tabs, request builder, response viewer, trace, agent
   lib/         assertions, persistence, url, variables, query params,
-               path params, placeholders, timings
+               path params, placeholders, timings, generated routes
+desktop/       the same two halves in one window, see desktop/README.md
 ```
 
 Requests go through the backend rather than straight from the browser, which

@@ -1,10 +1,23 @@
 import { Router, Request, Response } from "express";
-import { GoogleGenerativeAI, SchemaType, FunctionCall } from "@google/generative-ai";
+import {
+  getProvider,
+  ToolDeclaration,
+  ToolCall,
+  ToolResult,
+  providerName,
+} from "../services/llm";
 import { forwardRequest } from "../services/proxy";
+import { beginRun, endRun, cancelRun } from "../services/cancellation";
 import { generateEndpoint, GeneratedEndpoint } from "../services/codegen";
+import {
+  Instruction,
+  coerceInstructions,
+  formatInstructions,
+  MAX_INSTRUCTIONS,
+  MAX_INSTRUCTION_CHARS,
+} from "../services/instructions";
 
 const router = Router();
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
 // how many tool round trips before we stop. keeps a confused model from
 // hammering an endpoint forever.
@@ -17,125 +30,137 @@ const MAX_TOOL_ROUNDS = 25;
 // a real run always has.
 export const MAX_ACTIONS_PER_CHAT = 30;
 
-// every tool round costs one model request, so a single "test everything" run
-// can burn a dozen. the lite model has a much larger free tier allowance than
-// gemini-3.5-flash, which caps at 20 requests a day.
-const CHAT_MODEL = process.env.GEMINI_CHAT_MODEL || "gemini-3.1-flash-lite";
-
-const sendRequestTool = {
+const sendRequestTool: ToolDeclaration = {
   name: "send_request",
   description:
     "Send a real HTTP request and get the actual response back. Use this to test endpoints instead of describing what the user should do. Returns status, headers, body and timing.",
   parameters: {
-    type: SchemaType.OBJECT,
     properties: {
       method: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "HTTP method, e.g. GET, POST, PUT, PATCH, DELETE",
       },
       url: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Full URL including protocol and port, e.g. http://localhost:3001/api/users",
       },
       headers: {
-        type: SchemaType.STRING,
+        type: "string",
         description:
           "Optional request headers as a JSON object string, e.g. {\"Authorization\":\"Bearer abc\"}",
       },
       body: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Optional request body as a JSON string. Omit for GET.",
       },
     },
     required: ["method", "url"],
   },
-} as const;
+};
 
 // the two tools below never touch the network. they hand a filled in request or
 // a set of checks back to the ui for the developer to look over and run, which
 // is why they stay available even when read-only mode blocks send_request.
-const createRequestTool = {
+const createRequestTool: ToolDeclaration = {
   name: "create_request",
   description:
     "Open a new request tab in the user's UI, pre-filled with a method, url, headers and body. Nothing is sent: the user reviews it and presses Send themselves. Use this when the user asks you to set up, prepare or draft a request rather than run it. Works in read-only mode.",
   parameters: {
-    type: SchemaType.OBJECT,
     properties: {
       method: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "HTTP method, e.g. GET, POST, PUT, PATCH, DELETE",
       },
       url: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Full URL including protocol and port",
       },
       headers: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Optional headers as a JSON object string",
       },
       body: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Optional request body as a JSON string. Omit for GET.",
       },
       label: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Short label for the tab, e.g. 'Create incident'",
       },
     },
     required: ["method", "url"],
   },
-} as const;
+};
 
-const createAssertionsTool = {
+const createAssertionsTool: ToolDeclaration = {
   name: "create_assertions",
   description:
     "Add assertions to the Tests panel of the user's active tab. They run automatically the next time that request is sent. Use this when the user asks for checks or tests on a response. Works in read-only mode.",
   parameters: {
-    type: SchemaType.OBJECT,
     properties: {
       assertions: {
-        type: SchemaType.STRING,
+        type: "string",
         description:
           'JSON array string. Each item is {"field","operator","value"}. field must start with one of: status, statusText, timing (ms), ttfb (ms), size (bytes), or data. The response payload lives under data, so check the body with data.id or data.user.email, never body.id. operator is one of: equals, not equals, contains, exists, greater than, less than. value is compared as a string and is ignored by exists.',
       },
     },
     required: ["assertions"],
   },
-} as const;
+};
 
-const setVariableTool = {
+const setVariableTool: ToolDeclaration = {
   name: "set_variable",
   description:
     "Store a value as a workspace variable the user can reuse as {{name}} in any tab's url, headers or body. Use this right after a login so the token stops being tied to one tab. Setting an existing name replaces it. Works in read-only mode.",
   parameters: {
-    type: SchemaType.OBJECT,
     properties: {
       name: {
-        type: SchemaType.STRING,
+        type: "string",
         description: "Variable name, letters, digits, underscore, dot or dash. e.g. token",
       },
-      value: { type: SchemaType.STRING, description: "The value to store" },
+      value: { type: "string" as const, description: "The value to store" },
     },
     required: ["name", "value"],
   },
-} as const;
+};
 
-const generateCodeTool = {
+const generateCodeTool: ToolDeclaration = {
   name: "generate_code",
   description:
     "Write the code for an endpoint that does not exist yet, in the style of the project's own router, controller and service files. The code is shown to the user to read and copy; it is NOT written to their files. A ready-to-test request tab opens alongside it. Use this when the user asks you to implement, add, build, write or create an endpoint, rather than to test one. Works in read-only mode.",
   parameters: {
-    type: SchemaType.OBJECT,
     properties: {
       description: {
-        type: SchemaType.STRING,
+        type: "string",
         description:
           "What the endpoint should do, in full. Include the method and path if the user gave them, what it accepts, what it returns, and any auth or validation they mentioned. Everything the code generator knows comes from this string, so do not abbreviate it.",
       },
     },
     required: ["description"],
   },
-} as const;
+};
+
+// The point of this one is that the user stops repeating themselves. It is not
+// a memory of the conversation — the history already carries that — it is for
+// the standing rules that outlive it: naming, validation, error shape. They go
+// into the workspace, where the user can read and switch off every one of them,
+// because a rule the app follows and the user cannot find is worse than a rule
+// they have to say twice.
+const rememberInstructionTool: ToolDeclaration = {
+  name: "remember_instruction",
+  description:
+    "Save a standing instruction about how the user wants code written or requests built, so they never have to repeat it. Call this when they state a durable preference — naming conventions, validation library, error response shape, auth style — not for one-off facts about this task, and not for anything specific to a single endpoint. Write it as a short imperative sentence in the user's own terms. Works in read-only mode.",
+  parameters: {
+    properties: {
+      text: {
+        type: "string",
+        description:
+          'The rule, as one short imperative sentence, e.g. "Use camelCase for JSON field names" or "Validate request bodies with zod".',
+      },
+    },
+    required: ["text"],
+  },
+};
 
 // matches the {{name}} pattern the frontend resolves
 const VARIABLE_NAME = /^[A-Za-z0-9_.-]+$/;
@@ -254,25 +279,15 @@ function isAllowed(method: string, url: string, allowWrites: boolean) {
   return false;
 }
 
-// the free tier answers 503 "high demand" often enough that a run of a dozen
-// endpoints will meet one. it clears on its own, so it is worth waiting out
-// rather than handing the user the provider's url.
-const RETRYABLE = /\b(429|500|502|503|504)\b/;
-const RETRY_DELAYS_MS = [1000, 3000, 7000];
+import { readableModelError, RETRYABLE, QUOTA_SPENT } from "../services/modelErrors";
 
-function readableModelError(err: any): string {
-  const raw = String(err?.message || err);
-  if (RETRYABLE.test(raw)) {
-    return "The model is busy right now. Everything above already happened; ask again to carry on.";
-  }
-  if (/api[_ ]?key|permission|401|403/i.test(raw)) {
-    return "The model rejected the API key. Check GEMINI_API_KEY in backend/.env.";
-  }
-  if (/quota|exhausted/i.test(raw)) {
-    return "The model's quota for today is used up. Everything above already happened.";
-  }
-  return raw;
-}
+// Five attempts over half a minute, not three over eleven seconds. The free
+// tier answers 503 "high demand" in bursts that last longer than eleven
+// seconds, and a request that takes twenty seconds and succeeds is worth far
+// more than one that gives up quickly — this is the only model in the family
+// that accepts the function role our tool calls need, so there is nowhere else
+// to fall back to. Quota failures are excluded from this and fail immediately.
+const RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
 
 // A run can take a minute across a dozen endpoints, and until it returned the
 // panel showed a spinner and nothing else. The log is built up as the run goes,
@@ -298,18 +313,35 @@ function publishRun(runId: string | undefined, log: ActionLogEntry[], note: RunN
   }
 }
 
+// Stopping a run that is under way. Honoured between tool rounds, where nothing
+// is half done: the tools that write have already finished or have not started.
+router.post("/cancel/:runId", (req: Request, res: Response) => {
+  const cancelled = cancelRun(String(req.params.runId));
+  res.json({
+    cancelled,
+    // false is not a failure: the run had already finished, which is the same
+    // outcome the developer wanted
+    detail: cancelled ? "cancelling" : "that run had already finished",
+  });
+});
+
 router.get("/progress/:runId", (req: Request, res: Response) => {
   const entry = runs.get(String(req.params.runId));
   res.json({ actions: entry ? entry.log : [], note: entry ? entry.note.text : null });
 });
 
+// A used-up daily quota is a 429 like any other, so this used to retry it three
+// times over eleven seconds — three more requests against a quota that had
+// nothing left to give, and eleven seconds before the developer was told
+// anything. Waiting only helps for the transient kind.
 async function sendWithRetry<T>(send: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await send();
     } catch (err: any) {
-      const retryable = RETRYABLE.test(String(err?.message || err));
-      if (!retryable || attempt >= RETRY_DELAYS_MS.length) throw err;
+      const raw = String(err?.message || err);
+      const worthWaitingFor = RETRYABLE.test(raw) && !QUOTA_SPENT.test(raw);
+      if (!worthWaitingFor || attempt >= RETRY_DELAYS_MS.length) throw err;
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
     }
   }
@@ -335,7 +367,8 @@ export type ActionLogEntry =
   | { kind: "draft"; method: string; url: string }
   | { kind: "assertions"; count: number }
   | { kind: "variable"; name: string }
-  | { kind: "code"; method: string; path: string; layers: number };
+  | { kind: "code"; method: string; path: string; layers: number }
+  | { kind: "instruction"; text: string };
 
 // the shape the frontend's ResponseViewer already knows how to render
 interface LoggedResponse {
@@ -369,6 +402,7 @@ export type UiAction =
     }
   | { type: "create_assertions"; assertions: { field: string; operator: string; value: string }[] }
   | { type: "set_variable"; name: string; value: string }
+  | { type: "remember_instruction"; text: string }
   // generated source, for the code view to show. it is read-only output: the
   // app has no path that writes to the user's files.
   | { type: "generated_code"; generated: GeneratedEndpoint };
@@ -528,6 +562,53 @@ function setVariable(args: any, uiActions: UiAction[], log: ActionLogEntry[] = [
   };
 }
 
+// A rule that is already on the list costs nothing and is not saved twice. The
+// comparison is on the text rather than on meaning, so two phrasings of the
+// same idea both land — the user can switch one off, which is a better failure
+// than the app deciding two sentences meant the same thing.
+export function rememberInstruction(
+  args: any,
+  uiActions: UiAction[],
+  log: ActionLogEntry[] = [],
+  existing: Instruction[] = []
+) {
+  const text = String(args.text ?? "").trim().replace(/\s+/g, " ");
+
+  if (!text) return { error: "text is required" };
+  if (text.length > MAX_INSTRUCTION_CHARS) {
+    return {
+      error: `An instruction has to fit in ${MAX_INSTRUCTION_CHARS} characters. Say the rule, not the reasoning. Do not retry with the same text.`,
+    };
+  }
+
+  const key = text.toLowerCase();
+  const already =
+    existing.some((i) => i.text.toLowerCase() === key) ||
+    uiActions.some((a) => a.type === "remember_instruction" && a.text.toLowerCase() === key);
+
+  if (already) {
+    return {
+      ok: true,
+      duplicate: true,
+      message: "That instruction is already saved, so nothing was added. Do not save it again.",
+    };
+  }
+
+  if (existing.length >= MAX_INSTRUCTIONS) {
+    return {
+      error: `The workspace already holds the maximum of ${MAX_INSTRUCTIONS} instructions. Tell the user to remove one in the Instructions panel. Do not retry.`,
+    };
+  }
+
+  uiActions.push({ type: "remember_instruction", text });
+  log.push({ kind: "instruction", text });
+
+  return {
+    ok: true,
+    message: `Saved. It will be followed from now on without being asked, and the user can see it in the Instructions panel. Do not repeat it back to them at length; a short acknowledgement is enough.`,
+  };
+}
+
 // Two things come out of one generation: the code, which the user reads, and a
 // request against the endpoint it describes, which lands in a tab like any
 // scanned route. The tab is the point — code you cannot exercise is a wall of
@@ -553,9 +634,29 @@ async function runGenerateCode(
   // spinner as one that has hung
   if (ctx.note) ctx.note.text = "reading your project's style, then writing the code";
   try {
-    generated = await generateEndpoint(ctx.projectPath, description);
+    // the same standing rules the chat follows, so code the agent writes and
+    // code the user asks for directly do not come out in two different styles
+    generated = await generateEndpoint(ctx.projectPath, description, ctx.instructions ?? []);
   } catch (err: any) {
-    return { error: `${err.message} Do not retry.` };
+    // Code that will not parse is the model slipping, not the project being
+    // wrong — there is nothing for the developer to fix and nothing for them to
+    // decide, so it is simply asked for again. Once: a second failure is a
+    // pattern, and hiding a pattern behind retries is how a broken thing looks
+    // merely slow.
+    if (err?.name === "UnusableCode") {
+      if (ctx.note) ctx.note.text = "that came back malformed — writing it again";
+      try {
+        generated = await generateEndpoint(
+          ctx.projectPath,
+          description,
+          ctx.instructions ?? []
+        );
+      } catch (second: any) {
+        return { error: `${second.message} Do not retry.` };
+      }
+    } else {
+      return { error: `${err.message} Do not retry.` };
+    }
   } finally {
     if (ctx.note) ctx.note.text = null;
   }
@@ -690,10 +791,43 @@ export interface ToolCtx {
   baseUrl?: string | null;
   // what is happening right now, for the panel to show while a slow tool runs
   note?: RunNote;
+  // the workspace's standing instructions, so a new one can be checked against
+  // the ones already saved rather than piling up a second copy
+  instructions?: Instruction[];
 }
 
-export async function runTool(call: FunctionCall, ctx: ToolCtx) {
+// What the panel says while a tool is running. A spinner that says "thinking"
+// for twenty seconds is the same spinner as one that has hung, and the tools
+// that take real time — a request over the network, a generation that reads the
+// project — are exactly the ones worth naming.
+function describeWork(call: ToolCall): string {
   const args: any = call.args || {};
+  const short = (url: string) => String(url || "").replace(/^https?:\/\/[^/]+/, "") || "the endpoint";
+
+  switch (call.name) {
+    case "send_request":
+      return `sending ${String(args.method || "GET").toUpperCase()} ${short(args.url)}`;
+    case "create_request":
+      return `opening a tab for ${String(args.method || "GET").toUpperCase()} ${short(args.url)}`;
+    case "create_assertions":
+      return "writing checks";
+    case "set_variable":
+      return `saving {{${String(args.name || "value")}}}`;
+    case "generate_code":
+      return "reading your project's style, then writing the code";
+    case "remember_instruction":
+      return "saving an instruction";
+    default:
+      return "working";
+  }
+}
+
+export async function runTool(call: ToolCall, ctx: ToolCtx) {
+  const args: any = call.args || {};
+
+  // set before the work and cleared after, so the panel names what is happening
+  // rather than leaving the developer to guess at a spinner
+  if (ctx.note) ctx.note.text = describeWork(call);
 
   if (ctx.used >= MAX_ACTIONS_PER_CHAT) {
     return {
@@ -717,12 +851,17 @@ export async function runTool(call: FunctionCall, ctx: ToolCtx) {
     case "set_variable":
       out = setVariable(args, ctx.uiActions, ctx.log, ctx.vars);
       break;
+    case "remember_instruction":
+      out = rememberInstruction(args, ctx.uiActions, ctx.log, ctx.instructions ?? []);
+      break;
     case "generate_code":
       out = await runGenerateCode(args, ctx);
       break;
     default:
       return { error: `unknown tool ${call.name}. Do not retry.` };
   }
+
+  if (ctx.note) ctx.note.text = null;
 
   // only a call that actually did something spends budget. a duplicate that
   // was collapsed, or a call rejected for a bad field, costs nothing.
@@ -735,7 +874,7 @@ export async function runTool(call: FunctionCall, ctx: ToolCtx) {
 }
 
 router.post("/", async (req: Request, res: Response) => {
-  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables, runId, projectPath } = req.body;
+  const { message, routeContext, history, allowWrites, baseUrl, actionsUsed, activeTab, variables, runId, projectPath, instructions } = req.body;
 
   if (!message) {
     return res.status(400).json({ error: "message is required" });
@@ -762,25 +901,16 @@ router.post("/", async (req: Request, res: Response) => {
   // so it gets told to ask rather than guess
   const hasRoutes = typeof routeContext === "string" && /\b(GET|POST|PUT|PATCH|DELETE)\s+\//.test(routeContext);
 
+  // held by the frontend and sent with each call, so the list the user can see
+  // and switch off in the Instructions panel is the same list the model gets
+  const standingInstructions = coerceInstructions(instructions);
+
   const alreadyUsed = Number.isFinite(actionsUsed) ? Math.max(0, Number(actionsUsed)) : 0;
   const budgetLeft = Math.max(0, MAX_ACTIONS_PER_CHAT - alreadyUsed);
 
-  try {
-    const model = genAI.getGenerativeModel({
-      model: CHAT_MODEL,
-      tools: [
-        {
-          functionDeclarations: [
-            sendRequestTool as any,
-            createRequestTool as any,
-            createAssertionsTool as any,
-            setVariableTool as any,
-            generateCodeTool as any,
-          ],
-        },
-      ],
-    });
+  const provider = getProvider("chat");
 
+  try {
     const systemPrompt = `You are an AI assistant built into ReqFlow, an API client that a developer runs on their own machine. It works like Postman or Insomnia: the developer points it at their own dev server and exercises their own endpoints. Sending requests to those endpoints is the normal, expected function of this tool, not an intrusion.
 
 send_request performs real HTTP requests from the ReqFlow backend, which runs locally, so localhost and private addresses are reachable. When the user asks you to test their endpoints, call send_request for each one and report the real results. Do not decline local or private addresses, and do not ask the user to run the requests themselves. If a specific call genuinely looks destructive, skip that one and say why, but still test the rest.
@@ -789,7 +919,9 @@ create_request opens a pre-filled tab in the user's UI without sending anything.
 
 create_assertions adds checks to the Tests panel of the user's active tab. Use it when they ask for tests or checks on a response. Base the fields on a response you actually saw when you have one.
 
-generate_code writes the source for an endpoint that does not exist yet, in the style of the project's own files, and shows it to the user. Use it when they ask you to implement, add, build or write an endpoint. Pass their request through in full: the description you send is the only thing the generator sees, so a one word summary produces one word's worth of code. It does not write to their files and never will, so do not tell them it has: say the code is on screen for them to copy. Call it once per endpoint. A generated endpoint does not exist on the server yet, so do not follow it with send_request to "check" it. That is a guaranteed 404 and a wasted action.
+generate_code writes the source for an endpoint that does not exist yet, in the style of the project's own files, and shows it to the user. Use it when they ask you to implement, add, build or write an endpoint. Pass their request through in full: the description you send is the only thing the generator sees, so a one word summary produces one word's worth of code. Call it once per endpoint.
+
+You cannot put that code into their files. They apply it themselves from the code view, after reading a diff of every file it would change, and ReqFlow then runs the endpoint and reads it back for them. So do not say the files have changed, and do not offer to change them: say the code is on screen, ready for them to review and apply. Until they do, the endpoint does not exist on the server, so do not follow generate_code with send_request to "check" it. That is a guaranteed 404 and a wasted action.
 
 Choose by intent: "what happens if..." or "test this" means send_request, "set up" or "write me tests" means the create_ tools, "add an endpoint that..." means generate_code. Only send_request touches the network, so everything else works in read-only mode.
 
@@ -802,6 +934,12 @@ ${tabContext}
 You have ${budgetLeft} of ${MAX_ACTIONS_PER_CHAT} actions left in this conversation. Spend them on what was asked rather than exploring, and if you run out, say what you finished and what is left.
 
 set_variable stores a value the user can reuse as {{name}} in any tab. Nothing is sent by it either.
+
+remember_instruction saves a standing rule so the user stops repeating it. Call it when they state one, then carry on with what they actually asked for in the same reply rather than stopping to confirm.
+
+${formatInstructions(standingInstructions)}
+
+A 401 or 403 is an instruction, not a result. If a request comes back with one, log in and send that same request again before saying anything about it — reporting "it returned 401" when you were holding the means to authenticate is reporting your own omission as the endpoint's behaviour. Say afterwards that you had to log in, and which endpoint needed it.
 
 When endpoints need auth, call the login endpoint first and read the token out of the response body. Then call set_variable to save it as {{token}}, and from that point build Authorization headers as "Bearer {{token}}" rather than pasting the raw token. That way the user's tabs keep working after you are done, instead of each one holding its own copy that expires.
 
@@ -826,21 +964,6 @@ ${routeContext}`
 
 Keep answers concise. After testing, summarise results compactly, one line per endpoint with method, path, status and timing, and call out anything that looks wrong.`;
 
-    const chatHistory = (history || []).map((h: any) => ({
-      role: h.role === "assistant" ? "model" : "user",
-      parts: [{ text: h.content }],
-    }));
-
-    const chat = model.startChat({
-      history: [
-        { role: "user", parts: [{ text: systemPrompt }] },
-        { role: "model", parts: [{ text: "understood. i'm ready to help with API development." }] },
-        ...chatHistory,
-      ],
-    });
-
-    let result = await sendWithRetry(() => chat.sendMessage(message));
-
     // trace is the visible record of everything the agent did. uiActions is the
     // separate mechanism the frontend applies. keeping them apart is what stops
     // a drafted tab being rendered as though it had been sent.
@@ -850,6 +973,7 @@ Keep answers concise. After testing, summarise results compactly, one line per e
       log: [],
       vars: incomingVars,
       used: alreadyUsed,
+      instructions: standingInstructions,
       projectPath: typeof projectPath === "string" && projectPath.trim() ? projectPath.trim() : null,
       baseUrl: typeof baseUrl === "string" ? baseUrl : null,
       note: { text: null },
@@ -859,25 +983,58 @@ Keep answers concise. After testing, summarise results compactly, one line per e
     // is visible to the next poll
     publishRun(runId, ctx.log, ctx.note!);
 
+    const chat = provider.startChat({
+      system: systemPrompt,
+      history: (history || []).map((h: any) => ({
+        role: h.role === "assistant" ? "assistant" : "user",
+        content: String(h.content ?? ""),
+      })),
+      tools: [
+        sendRequestTool,
+        createRequestTool,
+        createAssertionsTool,
+        setVariableTool,
+        generateCodeTool,
+        rememberInstructionTool,
+      ],
+      // An embedded model runs the tools itself, inside llama.cpp's own loop,
+      // so it is handed the same runTool the round-trip loop below calls. Both
+      // paths spend the same action budget and write the same trace; only who
+      // drives the loop differs.
+      runTool: (call) => runTool(call, ctx),
+    });
+
+    const signal = beginRun(runId);
+    let reply = await sendWithRetry(() => chat.send(message));
+
     // a failure part way through must not throw away the work already done.
     // by round eight the agent may have logged in, saved a token and tested
     // half the project; the actions are spent either way.
     let interrupted: string | null = null;
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const calls = result.response.functionCalls();
-      if (!calls || calls.length === 0) break;
+      if (reply.calls.length === 0) break;
 
-      const parts: any[] = [];
-      for (const call of calls) {
-        const output = await runTool(call, ctx);
-        parts.push({
-          functionResponse: { name: call.name, response: output as any },
-        });
+      // Between rounds, and before running the next set of tools: everything up
+      // to here has finished, and nothing after it has begun. Stopping anywhere
+      // else would leave a tool half done.
+      if (signal?.aborted) {
+        interrupted = "Stopped. Everything above already happened.";
+        break;
+      }
+
+      const results: ToolResult[] = [];
+      for (const call of reply.calls) {
+        results.push({ name: call.name, response: await runTool(call, ctx) });
+      }
+
+      if (signal?.aborted) {
+        interrupted = "Stopped. Everything above already happened.";
+        break;
       }
 
       try {
-        result = await sendWithRetry(() => chat.sendMessage(parts as any));
+        reply = await sendWithRetry(() => chat.sendToolResults(results));
       } catch (err: any) {
         interrupted = readableModelError(err);
         break;
@@ -887,15 +1044,19 @@ Keep answers concise. After testing, summarise results compactly, one line per e
     res.json({
       response: interrupted
         ? `${interrupted}${ctx.log.length ? "" : " Nothing was sent."}`
-        : result.response.text(),
+        : reply.text,
       trace: ctx.log,
       uiActions: ctx.uiActions,
       actionsUsed: ctx.used,
       actionsRemaining: MAX_ACTIONS_PER_CHAT - ctx.used,
       actionLimit: MAX_ACTIONS_PER_CHAT,
+      // what actually reached the prompt, so the checklist on screen is a
+      // record rather than the frontend's assumption about what was sent
+      instructionsUsed: standingInstructions.map((i) => i.id),
     });
 
     if (runId) runs.delete(runId);
+    endRun(runId);
   } catch (err: any) {
     console.error("ai chat error:", err.message);
     res.status(500).json({ error: readableModelError(err) });

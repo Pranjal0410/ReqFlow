@@ -1,7 +1,10 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { pickStyleReferences } from "../services/styleReference";
+import { listSourceFiles } from "../services/fileReader";
+import { pickStyleReferences,
+  pickSchemaReferences,
+} from "../services/styleReference";
 
 const tempDirs: string[] = [];
 
@@ -293,5 +296,117 @@ export async function GET(req: Request) {
     });
 
     expect(pick(dir).service).toBe("services/users.js");
+  });
+});
+
+// The generator was writing queries against a schema it had imagined. Given a
+// router and a service but no data model, it answered GET /incidents/:id/notes
+// with .populate('notes.author') on a project whose notes are separate
+// documents — code that parses, applies, boots, and answers 500.
+describe("pickSchemaReferences", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-schema-"));
+    fs.mkdirSync(path.join(root, "src", "models"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "src", "models", "Incident.js"),
+      "const mongoose = require('mongoose');\nconst incidentSchema = new mongoose.Schema({ title: String });\nmodule.exports = mongoose.model('Incident', incidentSchema);"
+    );
+    fs.writeFileSync(
+      path.join(root, "src", "models", "User.js"),
+      "const mongoose = require('mongoose');\nconst userSchema = new mongoose.Schema({ email: String });\nmodule.exports = mongoose.model('User', userSchema);"
+    );
+    fs.writeFileSync(
+      path.join(root, "src", "routes.js"),
+      "const router = require('express').Router();\nrouter.get('/', (req, res) => res.json([]));"
+    );
+  });
+
+  const files = () => listSourceFiles(root);
+
+  it("finds the files that define a record", () => {
+    const found = pickSchemaReferences(root, files(), "/api/incidents");
+    expect(found.map((s) => path.basename(s.path)).sort()).toEqual(["Incident.js", "User.js"]);
+  });
+
+  it("puts the endpoint's own resource first", () => {
+    // /api/incidents/:id/notes is about incidents, so Incident.js is the one
+    // that has to fit
+    const found = pickSchemaReferences(root, files(), "/api/incidents/:id/notes");
+    expect(path.basename(found[0].path)).toBe("Incident.js");
+  });
+
+  it("does not mistake a router for a data model", () => {
+    const found = pickSchemaReferences(root, files(), "/api/incidents");
+    expect(found.some((s) => s.path.endsWith("routes.js"))).toBe(false);
+  });
+
+  it("carries the schema text, since that is the whole point", () => {
+    const [first] = pickSchemaReferences(root, files(), "/api/incidents");
+    expect(first.content).toContain("new mongoose.Schema");
+  });
+
+  it("says nothing for a project that declares no models", () => {
+    const bare = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-bare-"));
+    fs.writeFileSync(path.join(bare, "index.js"), "console.log('hi');");
+    expect(pickSchemaReferences(bare, listSourceFiles(bare), "/api/x")).toEqual([]);
+  });
+});
+
+// A PATCH /api/incidents/:id/commander was written into src/routes/auth.js.
+// The picker chose whichever router scored highest across the project, the model
+// was shown only that file, and it wrote there. Code landing in an unrelated
+// router is worse than a style mismatch: it can break routes that already work.
+describe("picking the files an endpoint belongs in", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-belongs-"));
+    fs.mkdirSync(path.join(root, "src", "routes"), { recursive: true });
+    fs.mkdirSync(path.join(root, "src", "services"), { recursive: true });
+
+    const router = (name: string) =>
+      `const express = require('express');\nconst router = express.Router();\nrouter.get('/', (req, res) => res.json([]));\nrouter.post('/', (req, res) => res.status(201).json({}));\nmodule.exports = router;\n// ${name}`;
+    const service = (name: string) =>
+      `const list = async () => [];\nconst find = async (id) => ({ id });\nmodule.exports = { list, find };\n// ${name}`;
+
+    fs.writeFileSync(path.join(root, "src", "routes", "auth.js"), router("auth"));
+    fs.writeFileSync(path.join(root, "src", "routes", "incidents.js"), router("incidents"));
+    fs.writeFileSync(path.join(root, "src", "services", "authService.js"), service("auth"));
+    fs.writeFileSync(path.join(root, "src", "services", "incidentService.js"), service("incident"));
+
+    // the entry point wires up the real files
+    fs.writeFileSync(
+      path.join(root, "src", "index.js"),
+      "require('./routes/auth');\nrequire('./routes/incidents');\nrequire('./services/authService');\nrequire('./services/incidentService');"
+    );
+  });
+
+  const chosen = (forPath: string) =>
+    pickStyleReferences(root, forPath)
+      .references.map((r) => path.basename(r.path))
+      .sort();
+
+  it("writes an incidents endpoint against the incidents files", () => {
+    expect(chosen("/api/incidents/:id/commander")).toEqual(["incidentService.js", "incidents.js"]);
+  });
+
+  it("writes an auth endpoint against the auth files", () => {
+    expect(chosen("/api/auth/logout")).toEqual(["auth.js", "authService.js"]);
+  });
+
+  it("still picks something when the endpoint names no resource it has", () => {
+    expect(pickStyleReferences(root, "/api/widgets").references.length).toBeGreaterThan(0);
+  });
+
+  it("passes over a file nothing imports, even when the name matches", () => {
+    // a path bug once left a dead services/incidents.js beside the real
+    // incidentService.js; being smaller, it scored better and got written into
+    fs.writeFileSync(
+      path.join(root, "src", "services", "incidents.js"),
+      "const list = async () => [];\nmodule.exports = { list };"
+    );
+    expect(chosen("/api/incidents/:id/commander")).toEqual(["incidentService.js", "incidents.js"]);
   });
 });

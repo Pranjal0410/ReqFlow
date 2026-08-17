@@ -1,12 +1,11 @@
-import { GoogleGenerativeAI } from "@google/generative-ai";
 import { DetectedRoute } from "../types";
 import { deriveFileRoutes } from "./frameworkRoutes";
+import { getProvider, stripFences } from "./llm";
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-
-// gemini-3.5-flash caps at 20 requests a day on the free tier, which a few
-// scans will burn through. the lite model has its own, much larger allowance.
-const ANALYZE_MODEL = process.env.GEMINI_ANALYZE_MODEL || "gemini-3.1-flash-lite";
+// Which model reads the code is decided by LLM_PROVIDER, so a scan can run
+// against a model on this machine and never send the project anywhere. The
+// prompt below is the same either way: it asks for JSON and nothing else, which
+// is the one thing every model here can be held to.
 
 // Framework routes are facts, not guesses: Next.js puts the path in the folder
 // name and the method in an exported function name, both of which are read
@@ -28,9 +27,71 @@ ${listed}
 use those method and path pairs exactly as given for those files. do not rewrite, shorten or guess a different path for them, and do not skip one because the code does not mention it. read each file only for its description, params and body. every other file in this code is ordinary express, so extract its routes as usual.`;
 }
 
-export async function analyzeCode(files: { path: string; content: string }[]): Promise<DetectedRoute[]> {
-  const model = genAI.getGenerativeModel({ model: ANALYZE_MODEL });
+// A hosted model takes the whole project in one prompt. A model on a laptop
+// cannot: the scan is allowed 800k characters of source and a local context is
+// a few thousand tokens, so the choice is between batching and a local scan
+// that only ever works on toy projects.
+//
+// Split on whole files, never inside one. Half a router tells the model about
+// routes whose handlers it cannot see, and the routes it invents to fill the
+// gap are worse than the ones it would have missed.
+export function batchFiles(
+  files: { path: string; content: string }[],
+  maxChars: number
+): { path: string; content: string }[][] {
+  if (!maxChars || maxChars <= 0) return files.length ? [files] : [];
 
+  const batches: { path: string; content: string }[][] = [];
+  let current: { path: string; content: string }[] = [];
+  let size = 0;
+
+  for (const file of files) {
+    // a single file over the limit still goes, alone. it will be refused by the
+    // provider with a reason, which is better than being silently dropped from
+    // a scan that then reports the project has fewer endpoints than it has.
+    if (current.length > 0 && size + file.content.length > maxChars) {
+      batches.push(current);
+      current = [];
+      size = 0;
+    }
+    current.push(file);
+    size += file.content.length;
+  }
+
+  if (current.length) batches.push(current);
+  return batches;
+}
+
+export async function analyzeCode(files: { path: string; content: string }[]): Promise<DetectedRoute[]> {
+  const provider = getProvider("analyze");
+
+  // room for the prompt around the code, which is about 2k characters
+  const budget = provider.maxPromptChars ? provider.maxPromptChars - 2500 : 0;
+  const batches = batchFiles(files, budget);
+
+  const found: DetectedRoute[] = [];
+  for (const batch of batches) {
+    found.push(...(await analyzeBatch(provider, batch)));
+  }
+
+  // deduped across batches: a route registered in one file and mounted in
+  // another can be reported twice, and two rows for one endpoint reads as the
+  // project having a duplicate it does not have
+  const seen = new Set<string>();
+  const routes = found.filter((r) => {
+    const key = `${String(r.method).toUpperCase()} ${r.path}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  return mergeFileRoutes(routes, deriveFileRoutes(files));
+}
+
+async function analyzeBatch(
+  provider: ReturnType<typeof getProvider>,
+  files: { path: string; content: string }[]
+): Promise<DetectedRoute[]> {
   const codeBlock = files
     .map((f) => `// FILE: ${f.path}\n${f.content}`)
     .join("\n\n---\n\n");
@@ -61,21 +122,19 @@ ${fileRouteBlock(files)}
 code:
 ${codeBlock}`;
 
-  const result = await model.generateContent(prompt);
-  const text = result.response.text().trim();
-
-  // clean up in case gemini wraps it in backticks
-  const cleaned = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+  // clean up in case the model wraps it in backticks, which every one of them
+  // does sooner or later however plainly it was asked not to
+  const cleaned = stripFences(await provider.generateText(prompt));
 
   let parsed: DetectedRoute[];
   try {
     parsed = JSON.parse(cleaned);
   } catch (err) {
-    console.error("gemini returned bad json:", cleaned);
+    console.error(`${provider.name} returned bad json:`, cleaned);
     parsed = [];
   }
 
-  return mergeFileRoutes(Array.isArray(parsed) ? parsed : [], deriveFileRoutes(files));
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 // The prompt asks the model not to drop a derived route, and mostly it does not.

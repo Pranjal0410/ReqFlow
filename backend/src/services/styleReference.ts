@@ -28,6 +28,21 @@ const MAX_REFERENCE_CHARS = 12_000;
 // opening every file in a large project would cost as much as a scan, and this
 // runs while someone waits on a chat reply. the ranking below means the files
 // most likely to be the exemplars are the ones that get opened.
+// Enough to separate two files of the same layer, and deliberately not enough to
+// overrule what layer a file is. Set high, these bonuses decided the layer
+// itself: a controller, merely because something imported it, outscored the
+// actual router for the router slot. The path and content signals say what a
+// file *is*; these two only say which of the equals is the right one.
+const RESOURCE_MATCH = 20;
+
+// A file nothing imports is either an entry point or debris. This project had
+// both services/incidentService.js, which everything uses, and a 28-line
+// services/incidents.js that a path bug once created and nothing ever required —
+// and the smaller one scored better, because the real service is too large to
+// serve as an exemplar. Writing an endpoint into a file nothing requires puts
+// working code somewhere it can never run.
+const WIRED_IN = 6;
+
 const MAX_EXAMINE = 250;
 
 const DIR_HINTS: Record<Layer, RegExp> = {
@@ -126,17 +141,125 @@ function describe(layer: Layer, filePath: string, projectPath: string): string {
   return `${layer} style from ${shown}`;
 }
 
+// The data shapes the endpoint will be written against.
+//
+// Kept apart from the style references on purpose: these are read, never
+// written to. A model told a schema is one of the layers it may write happily
+// adds a field to it, and a generated endpoint that quietly edits the database
+// schema is a far worse outcome than one that guesses wrong.
+export interface SchemaReference {
+  path: string;
+  content: string;
+}
+
 export interface StylePick {
   references: StyleReference[];
+  // mongoose/sequelize/prisma model files, as context
+  schemas: SchemaReference[];
   // how many source files were considered, so an empty result can say whether
   // it looked at nothing or looked and found nothing
   examined: number;
 }
 
-export function pickStyleReferences(rawPath: string): StylePick {
+// A file that defines what a record looks like. Recognised by content rather
+// than by directory, because projects put these in models/, schemas/, entities/
+// or beside the code that uses them.
+const DEFINES_SCHEMA =
+  /new\s+mongoose\.Schema|new\s+Schema\s*\(|sequelize\.define|DataTypes\.|@Entity\(|createTable/;
+
+const MAX_SCHEMA_CHARS = 4000;
+
+export function pickSchemaReferences(
+  rawPath: string,
+  files: string[],
+  forPath: string
+): SchemaReference[] {
+  const projectPath = expandHome(rawPath);
+
+  // the resource the endpoint is about — /api/incidents/:id/notes is about
+  // incidents, so Incident.js is the schema that matters
+  const resource = forPath
+    .split("/")
+    .filter((seg) => seg && !seg.startsWith(":") && seg !== "api")[0];
+  const singular = resource ? resource.replace(/s$/, "").toLowerCase() : "";
+
+  const found: { ref: SchemaReference; relevant: boolean }[] = [];
+
+  for (const filePath of files) {
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+    if (!DEFINES_SCHEMA.test(content)) continue;
+    if (content.length > MAX_SCHEMA_CHARS) continue;
+
+    const name = path.basename(filePath).toLowerCase();
+    found.push({
+      ref: { path: path.relative(projectPath, filePath), content },
+      relevant: !!singular && name.includes(singular),
+    });
+  }
+
+  // the endpoint's own resource first, then the rest — a create endpoint often
+  // references two, and the one it is named after is the one that must fit
+  const ordered = [...found.filter((f) => f.relevant), ...found.filter((f) => !f.relevant)];
+  return ordered.slice(0, 3).map((f) => f.ref);
+}
+
+// The resource an endpoint belongs to: /api/incidents/:id/commander is about
+// incidents, and its code belongs in the incidents router — not in whichever
+// router happened to score highest across the project.
+export function resourceOf(endpointPath: string): string {
+  const segment = endpointPath
+    .split("/")
+    .filter((seg) => seg && !seg.startsWith(":") && seg.toLowerCase() !== "api")[0];
+  return segment ? segment.replace(/s$/, "").toLowerCase() : "";
+}
+
+// Which files anything else in the project imports.
+//
+// Resolved to absolute paths rather than compared by name: this project has both
+// routes/incidents.js, which its entry point requires, and services/incidents.js,
+// which nothing does. Matched on the basename alone the dead one looked wired
+// because the live one shares its name — and the dead one is smaller, so it won.
+function importedFiles(files: string[]): Set<string> {
+  const imported = new Set<string>();
+  const exists = new Set(files);
+
+  for (const filePath of files) {
+    let content: string;
+    try {
+      content = fs.readFileSync(filePath, "utf-8");
+    } catch {
+      continue;
+    }
+    for (const [, spec] of content.matchAll(/(?:require\(|from\s*)['"]([^'"]+)['"]/g)) {
+      if (!spec.startsWith(".")) continue;
+      const base = path.resolve(path.dirname(filePath), spec);
+      // require('./x') can mean x.js, x/index.js, or x itself
+      for (const candidate of [
+        base,
+        `${base}.js`,
+        `${base}.ts`,
+        `${base}.mjs`,
+        `${base}.cjs`,
+        path.join(base, "index.js"),
+        path.join(base, "index.ts"),
+      ]) {
+        if (exists.has(candidate)) imported.add(candidate);
+      }
+    }
+  }
+  return imported;
+}
+
+export function pickStyleReferences(rawPath: string, forPath = ""): StylePick {
   // the walk expands ~ itself, and the paths it returns are absolute, so the
   // root has to be expanded here too or every relative path comes out wrong
   const projectPath = expandHome(rawPath);
+  const resource = resourceOf(forPath);
   const all = listSourceFiles(projectPath)
     .filter((f) => !SKIP_FILE.test(f))
     .filter((f) => !CLIENT_TREE.test(path.dirname(f).slice(projectPath.length)));
@@ -151,6 +274,7 @@ export function pickStyleReferences(rawPath: string): StylePick {
     .sort((a, b) => b.hint - a.hint)
     .slice(0, MAX_EXAMINE);
 
+  const wired = importedFiles(all);
   const best = new Map<Layer, { filePath: string; content: string; score: number }>();
 
   for (const { filePath } of ranked) {
@@ -173,7 +297,22 @@ export function pickStyleReferences(rawPath: string): StylePick {
       // reference and an honest gap, rather than an invented exemplar.
       if (layer !== "router" && onPath === 0) continue;
 
-      const score = onPath + contentScore(layer, content) + sizeScore(content.length);
+      // A project has one auth router and one incidents router, and only one of
+      // them is where a new incidents endpoint goes. Without this the exemplar
+      // was whichever router scored highest overall — auth.js, every time — and
+      // the model, shown only that file, wrote a PATCH /api/incidents/:id/...
+      // into it. Code landing in an unrelated router is worse than a style
+      // mismatch: it can break the routes that were already working there.
+      const belongs = resource && path.basename(filePath).toLowerCase().includes(resource);
+
+      const isWired = wired.has(filePath);
+
+      const score =
+        onPath +
+        contentScore(layer, content) +
+        sizeScore(content.length) +
+        (belongs ? RESOURCE_MATCH : 0) +
+        (isWired ? WIRED_IN : 0);
       // below this the match is incidental: a file that merely lacks res.json
       // is not thereby a service layer
       if (score < 5) continue;
@@ -211,5 +350,5 @@ export function pickStyleReferences(rawPath: string): StylePick {
     });
   }
 
-  return { references, examined: ranked.length };
+  return { references, schemas: [], examined: ranked.length };
 }

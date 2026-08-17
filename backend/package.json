@@ -1,7 +1,7 @@
 {
-  "name": "backend",
+  "name": "reqflow-backend",
   "version": "1.0.0",
-  "description": "",
+  "description": "ReqFlow's server: project scanning, code generation, the request proxy, and apply-and-verify.",
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -32,5 +32,8 @@
     "supertest": "^7.2.2",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
+  },
+  "optionalDependencies": {
+    "node-llama-cpp": "^3.20.0"
   }
 }

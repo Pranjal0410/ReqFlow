@@ -12,7 +12,15 @@ function serve(handler) {
   });
 }
 
-const close = (server) => new Promise((resolve) => server.close(resolve));
+// close() waits for open connections to end, and the probes in these tests leave
+// keep-alive sockets behind — so teardown sat there until jest's 5s hook timeout
+// and took the rest of the file down with it. Dropping the sockets first makes
+// closing a decision rather than a wait.
+const close = (server) =>
+  new Promise((resolve) => {
+    server.closeAllConnections?.();
+    server.close(resolve);
+  });
 
 // Two different questions, and the guard used to ask the wrong one. Binding
 // 127.0.0.1 can succeed while a server started on the dual-stack wildcard is

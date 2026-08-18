@@ -111,7 +111,13 @@ function listenOn(server, port) {
       server.removeListener("error", onError);
       resolve({
         url: `http://localhost:${server.address().port}`,
-        close: () => new Promise((done) => server.close(done)),
+        // the app is quitting: a browser tab holding a keep-alive socket must
+        // not decide how long that takes
+        close: () =>
+          new Promise((done) => {
+            server.closeAllConnections?.();
+            server.close(done);
+          }),
       });
     });
   });

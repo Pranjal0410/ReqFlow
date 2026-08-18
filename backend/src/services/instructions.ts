@@ -28,6 +28,13 @@ export function coerceInstructions(raw: any): Instruction[] {
   const out: Instruction[] = [];
 
   for (const item of raw) {
+    // A rule the user switched off is dropped here, at the boundary where
+    // whatever was sent becomes the type the rest of the code trusts. It used to
+    // be dropped nowhere: this function kept only id and text, so `enabled` was
+    // gone before anything could honour it, and every filter downstream saw a
+    // rule with no flag and treated it as on.
+    if (item?.enabled === false) continue;
+
     const text = String(item?.text ?? "").trim().replace(/\s+/g, " ");
     if (!text) continue;
 

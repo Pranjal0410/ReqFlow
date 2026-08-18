@@ -110,3 +110,32 @@ describe("rememberInstruction", () => {
     expect(uiActions).toHaveLength(0);
   });
 });
+
+// The panel tells the user "everything switched on is sent with every request".
+// That is a claim about what the thing that sends does, and it should be true of
+// that, not of one caller that happens to filter first.
+describe("instructions the user switched off", () => {
+  const rules = [
+    { id: "i1", text: "Use camelCase for JSON field names", enabled: true },
+    { id: "i2", text: "Never use var", enabled: false },
+  ] as any;
+
+  it("does not put a switched-off rule in the prompt", () => {
+    const prompt = formatInstructions(coerceInstructions(rules));
+    expect(prompt).toContain("camelCase");
+    expect(prompt).not.toContain("Never use var");
+  });
+
+  it("says nothing at all when every rule is off", () => {
+    expect(formatInstructions(coerceInstructions([{ id: "i", text: "x", enabled: false }]))).toBe("");
+  });
+
+  it("never reports a switched-off rule as having been sent", () => {
+    // the panel marks a rule "in the last request" from this list
+    expect(coerceInstructions(rules).map((i) => i.id)).toEqual(["i1"]);
+  });
+
+  it("treats a rule with no flag as on, which is how older ones are stored", () => {
+    expect(formatInstructions(coerceInstructions([{ id: "i", text: "keep me" }]))).toContain("keep me");
+  });
+});

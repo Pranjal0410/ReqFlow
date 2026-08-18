@@ -1052,6 +1052,9 @@ Keep answers concise. After testing, summarise results compactly, one line per e
       actionLimit: MAX_ACTIONS_PER_CHAT,
       // what actually reached the prompt, so the checklist on screen is a
       // record rather than the frontend's assumption about what was sent
+      // reported back so the panel can mark a rule as having reached the model.
+      // that is a claim about what was sent, and switched-off rules never make
+      // it this far — coerceInstructions drops them.
       instructionsUsed: standingInstructions.map((i) => i.id),
     });
 

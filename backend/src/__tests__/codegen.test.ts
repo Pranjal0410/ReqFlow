@@ -8,6 +8,7 @@ import {
   UnusableCode,
   registeredRoute,
   alignPath,
+  asFragment,
 } from "../services/codegen";
 
 // Told a project has no controller layer, the model answers with a controller
@@ -372,5 +373,66 @@ describe("the method comes from the code, not from beside it", () => {
 
   it("does not cut a path shorter than the tail it read", () => {
     expect(alignPath("/x", "/a/b/c")).toBe("/x");
+  });
+});
+
+// The generation-time check parsed each block as a whole script, and a perfectly
+// good service block fails that way on "await is only valid in async functions".
+// The block is going to sit inside the project's own file, where that await is
+// legal — refusing it made generation fail about half the time.
+describe("checking a block as the fragment it is", () => {
+  const service = `const getTimeline = async (id) => {
+  const updates = await IncidentUpdate.find({ incidentId: id }).sort({ createdAt: -1 });
+  return updates;
+};`;
+
+  it("accepts a block whose await is inside its own async function", () => {
+    expect(parseError("service.js", asFragment(service))).toBeNull();
+  });
+
+  it("accepts a bare return, which a fragment may have", () => {
+    expect(parseError("service.js", asFragment("return 1;"))).toBeNull();
+  });
+
+  it("still catches the thing it exists for", () => {
+    expect(parseError("service.js", asFragment("const a = (;"))).toBeTruthy();
+    expect(parseError("service.js", asFragment("const a = () => {};\n)"))).toBeTruthy();
+  });
+});
+
+// How a regenerated function lost its own opening line: the stripper matched any
+// top-level const, and `const getTimeline = async (id) => {` was already in the
+// file — because that function was being rewritten. It was cut as a duplicate,
+// leaving a body with no head and a trailing brace closing nothing. Every
+// regeneration of an existing endpoint came back unparseable.
+describe("dropDuplicateLines strips imports, not declarations", () => {
+  const service = `const mongoose = require('mongoose');
+const { IncidentUpdate } = require('../models');
+
+const getTimeline = async (incidentId) => {
+  return IncidentUpdate.find({ incidentId });
+};
+
+module.exports = { getTimeline };
+`;
+
+  it("keeps a function the file already declares, so it can be replaced", () => {
+    const block = `const getTimeline = async (incidentId) => {
+  return IncidentUpdate.find({ incidentId }).sort({ createdAt: -1 });
+};`;
+    const kept = dropDuplicateLines(block, service);
+    expect(kept).toContain("const getTimeline = async (incidentId) => {");
+    // and what is left still parses, which is the whole point
+    expect(parseError("service.js", asFragment(kept))).toBeNull();
+  });
+
+  it("still removes an import the file already has", () => {
+    const block = `const { IncidentUpdate } = require('../models');\nconst a = 1;`;
+    expect(dropDuplicateLines(block, service)).not.toContain("require('../models')");
+  });
+
+  it("keeps a const that is not an import at all", () => {
+    const block = `const LIMIT = 20;\nconst b = 2;`;
+    expect(dropDuplicateLines(block, service)).toContain("const LIMIT = 20;");
   });
 });

@@ -170,6 +170,17 @@ ${exemplars}`;
 const STRUCTURAL =
   /^(const|let|var|import)\s|^(module\.exports|exports\.[A-Za-z_$])\s*=|^export\s+(default|\{)|^require\(/;
 
+// A line that opens a body, and therefore heads the code that follows it.
+//
+// `const router = express.Router();` is complete in itself, and restating one
+// the file already has is a duplicate declaration. `const getTimeline = async
+// (id) => {` is the head of the very function being written — cutting it as a
+// duplicate leaves a body with no head and a trailing brace closing nothing,
+// which is what made every regeneration of an existing endpoint unparseable.
+//
+// Whether a line opens a body is the difference, and it is visible on the line.
+const OPENS_A_BODY = /(\{|=>)\s*$/;
+
 export function dropDuplicateLines(code: string, existing: string): string {
   // only the file's own top-level lines can be clashed with
   const already = new Set(
@@ -187,6 +198,8 @@ export function dropDuplicateLines(code: string, existing: string): string {
       if (!trimmed) return true;
       // indented means nested, and nested means local to a function
       if (/^\s/.test(line)) return true;
+      // never decapitate the block's own code
+      if (OPENS_A_BODY.test(trimmed)) return true;
       return !(already.has(trimmed) && STRUCTURAL.test(line));
     })
     .join("\n");
@@ -414,6 +427,12 @@ export function alignPath(full: string, registered: string | undefined): string 
   return `/${[...mount, ...tailParts].join("/")}`;
 }
 
+// The block as the file will hold it: inside a function, where await and return
+// are allowed. Only the shape changes; a real syntax error still fails.
+export function asFragment(code: string): string {
+  return `async function __reqflow_check() {\n${code}\n}`;
+}
+
 // Thrown when the model's own output will not parse. Named so the caller can
 // tell it apart from a project problem and simply ask again — the developer did
 // nothing wrong and there is nothing for them to fix.
@@ -489,10 +508,19 @@ export async function generateEndpoint(
   // and it reads as the app failing rather than as the model having produced a
   // stray bracket. It happens rarely and it does not happen twice in a row, so
   // it is caught here and asked for again.
-  const broken = layers.find((l) => parseError(l.path, l.code));
+  // Checked as a fragment, which is what it is.
+  //
+  // Parsed as a whole script, a perfectly good service block fails on "await is
+  // only valid in async functions" — the block is going to sit inside the
+  // project's own file, where that await is legal, and refusing it there made
+  // generation fail about half the time. Wrapping it the way the file will means
+  // this catches what it was meant to catch — an unbalanced bracket, a stray
+  // token — and nothing else. The authoritative check still runs at apply time,
+  // against the real merged file.
+  const broken = layers.find((l) => parseError(l.path, asFragment(l.code)));
   if (broken) {
     throw new UnusableCode(
-      `${broken.layer} code: ${parseError(broken.path, broken.code)}`
+      `${broken.layer} code: ${parseError(broken.path, asFragment(broken.code))}`
     );
   }
 

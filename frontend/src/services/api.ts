@@ -147,6 +147,35 @@ export async function verifyGenerated(input: {
   return res.data;
 }
 
+// What Settings can change about the model.
+//
+// The key is not in here, in either direction it is read. It goes out when the
+// user types one and never comes back: the backend reports whether a key is set,
+// never what it is, so nothing on this side can put a credential on screen.
+export interface ModelSettings {
+  provider: "gemini" | "local" | "embedded";
+  keySet: boolean;
+  localModelUrl: string;
+  localModelPath: string;
+  localModel: string;
+  storedAt: string;
+  writable: boolean;
+}
+
+export async function saveModelSettings(patch: {
+  provider?: string;
+  apiKey?: string;
+  localModelUrl?: string;
+  localModelPath?: string;
+  localModel?: string;
+}): Promise<{ saved: boolean; storedAt: string; detail?: string; settings: ModelSettings }> {
+  const res = await withTimeout(
+    axios.put(`${BASE}/model`, patch, { timeout: TIMEOUTS.quick }),
+    "the setting to be saved"
+  );
+  return res.data;
+}
+
 // Which model is doing the work and whether it answers. A real call to the
 // provider, so "configured" and "working" cannot be confused for each other.
 export async function checkModel(): Promise<{
@@ -155,6 +184,7 @@ export async function checkModel(): Promise<{
   model: string;
   local: boolean;
   detail: string;
+  settings?: ModelSettings;
 }> {
   const res = await withTimeout(axios.get(`${BASE}/model`, { timeout: TIMEOUTS.quick }), "the model")
   return res.data;

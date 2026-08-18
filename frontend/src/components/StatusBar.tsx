@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet } from "react-native";
 import { colors } from "../theme/colors";
 import { radius, transition } from "../theme/tokens";
 import { RunningProject } from "../types";
+import { ModelSettings } from "../services/api";
 
 export interface ModelStatus {
   ok: boolean;
@@ -10,6 +11,9 @@ export interface ModelStatus {
   model: string;
   local: boolean;
   detail: string;
+  // what Settings can change. never carries the key itself — only whether one
+  // is set — so no part of the UI can put a credential on screen.
+  settings?: ModelSettings;
 }
 
 interface Props {

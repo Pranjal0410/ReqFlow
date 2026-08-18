@@ -400,6 +400,10 @@ async function boot() {
       // proxied and no second process is started: the model ends up in the same
       // place the request handling is, which is what makes it fast.
       modelPath: usingLocalModel ? model.path : null,
+      // Settings writes here. It is the same file readApiKey() already looks in,
+      // so a key saved from inside the app is picked up next launch — and
+      // sealExistingKey() moves it into the keychain then, leaving no plain copy.
+      settingsFile: path.join(userDataDir, ".env"),
       onConflict: askAboutPortConflict,
       onGiveUp: reportBackendGaveUp,
     });

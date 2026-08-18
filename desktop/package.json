@@ -33,6 +33,7 @@
       "main.js",
       "preload.js",
       "key-prompt.html",
+      "model-prompt.html",
       "lib/**/*",
       "!lib/__tests__",
       "package.json"

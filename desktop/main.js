@@ -11,6 +11,17 @@ const {
   looksLikeKey,
   userEnvPath,
 } = require("./lib/apiKey");
+const {
+  catalogue,
+  findModel,
+  modelFile,
+  partFile,
+  readChoice,
+  writeChoice,
+  modelState,
+  download,
+  looksLikeGguf,
+} = require("./lib/model");
 
 // ReqFlow as a double-clickable app. Electron is a wrapper and nothing more:
 // the Express server is the same one npm run dev starts, and the window shows
@@ -109,6 +120,136 @@ function askForApiKey() {
   });
 }
 
+/* ---------------------------------------------------------------- model */
+
+// Where the model runs is asked once, on the first launch, and never again
+// unless the answer stops working. Running it here is the reason this is a
+// desktop app rather than a web page: the weights can sit next to the code they
+// are reading, and no interaction has to cross a network.
+//
+// Nothing downloads on its own. Several gigabytes arriving unannounced is the
+// kind of thing that makes people distrust an app, so the window asks first and
+// shows what it is fetching while it fetches it.
+function askAboutModel() {
+  return new Promise((resolve) => {
+    const userDataDir = app.getPath("userData");
+    const win = new BrowserWindow({
+      width: 560,
+      height: 520,
+      resizable: false,
+      title: "ReqFlow",
+      backgroundColor: "#0a0a0a",
+      webPreferences: {
+        preload: path.join(__dirname, "preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+
+    let aborter = null;
+
+    const cleanup = () => {
+      for (const channel of ["model:catalogue", "model:download", "model:choose-file"]) {
+        ipcMain.removeHandler(channel);
+      }
+      ipcMain.removeAllListeners("model:cancel");
+      ipcMain.removeAllListeners("model:choose-cloud");
+    };
+
+    const finish = (choice) => {
+      cleanup();
+      if (!win.isDestroyed()) win.destroy();
+      resolve(choice);
+    };
+
+    ipcMain.handle("model:catalogue", () => ({
+      catalogue: catalogue(),
+      // a download that was interrupted last time is offered as a resume, so
+      // nobody is told to fetch four gigabytes they already have
+      partial: Object.fromEntries(
+        catalogue().map((m) => {
+          const file = modelFile(userDataDir, m.id);
+          let bytes = 0;
+          try {
+            bytes = fs.statSync(partFile(file)).size;
+          } catch {
+            bytes = 0;
+          }
+          return [m.id, bytes];
+        })
+      ),
+    }));
+
+    ipcMain.handle("model:download", async (_event, id) => {
+      const model = findModel(id);
+      if (!model) return { ok: false, error: "no such model" };
+
+      aborter = new AbortController();
+      const target = modelFile(userDataDir, id);
+
+      try {
+        await download(model.url, target, {
+          signal: aborter.signal,
+          onProgress: (p) => {
+            if (!win.isDestroyed()) win.webContents.send("model:progress", p);
+          },
+        });
+      } catch (err) {
+        return { ok: false, error: err.message };
+      }
+
+      // an HTML error page saved under the right name is the likeliest wrong
+      // file, and it would fail at the first scan instead of here
+      if (!looksLikeGguf(target)) {
+        fs.rmSync(target, { force: true });
+        return { ok: false, error: "what arrived is not a model file. Try again." };
+      }
+
+      writeChoice(userDataDir, { kind: "catalogue", id });
+      finish({ kind: "catalogue", id });
+      return { ok: true };
+    });
+
+    ipcMain.handle("model:choose-file", async () => {
+      const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+        title: "Choose a .gguf model",
+        properties: ["openFile"],
+        filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+      });
+      if (canceled || !filePaths[0]) return { ok: false };
+
+      if (!looksLikeGguf(filePaths[0])) {
+        return { ok: false, error: "that file is not a GGUF model" };
+      }
+
+      writeChoice(userDataDir, { kind: "custom", path: filePaths[0] });
+      finish({ kind: "custom", path: filePaths[0] });
+      return { ok: true };
+    });
+
+    ipcMain.once("model:choose-cloud", () => {
+      writeChoice(userDataDir, { kind: "cloud" });
+      finish({ kind: "cloud" });
+    });
+
+    ipcMain.on("model:cancel", () => {
+      aborter?.abort();
+      // closing on cancel rather than returning to the list: the part file is
+      // kept, so opening ReqFlow again offers to carry on from where it stopped
+      finish(null);
+    });
+
+    // closing the window without answering is not a choice, and is not recorded
+    // as one. the next launch asks again.
+    win.on("closed", () => {
+      cleanup();
+      resolve(null);
+    });
+
+    win.loadFile(path.join(__dirname, "model-prompt.html"));
+  });
+}
+
 /* --------------------------------------------------------------- window */
 
 function createWindow(url) {
@@ -204,15 +345,37 @@ async function boot() {
     );
   }
 
+  const userDataDir = app.getPath("userData");
+
+  // Asked before the key is, because the answer decides whether a key is
+  // needed at all. Someone who runs the model here should not be asked for a
+  // credential they will never use.
+  if (!readChoice(userDataDir)) await askAboutModel();
+
+  let model = modelState(userDataDir);
+  const choice = readChoice(userDataDir);
+
+  // A model that was chosen and then went missing — deleted, or an external
+  // disk that is not plugged in — is offered again rather than failing at the
+  // first scan with a path nobody remembers choosing.
+  if (choice && choice.kind !== "cloud" && !model.ready) {
+    console.log("[desktop] the chosen model file is not there, asking again");
+    await askAboutModel();
+    model = modelState(userDataDir);
+  }
+
+  const usingLocalModel = model.ready;
+
   const apiKey = readApiKey({
-    userDataDir: app.getPath("userData"),
+    userDataDir,
     repoEnvPath: RESOURCES.repoEnv,
     safeStorage,
   });
 
   // asked before the server starts, so the key is in place for the first
-  // request rather than needing a restart to take effect
-  if (!apiKey) await askForApiKey();
+  // request rather than needing a restart to take effect. skipped entirely
+  // when the model runs here: there is nothing for a key to authorise.
+  if (!apiKey && !usingLocalModel) await askForApiKey();
 
   try {
     // "logs" is a real place on all three platforms, but asking for a path
@@ -229,16 +392,25 @@ async function boot() {
       entry: RESOURCES.backendEntry,
       cwd: RESOURCES.backendCwd,
       apiKey: readApiKey({
-        userDataDir: app.getPath("userData"),
+        userDataDir,
         repoEnvPath: RESOURCES.repoEnv,
         safeStorage,
       }),
+      // The backend loads the weights itself, in its own process. Nothing is
+      // proxied and no second process is started: the model ends up in the same
+      // place the request handling is, which is what makes it fast.
+      modelPath: usingLocalModel ? model.path : null,
       onConflict: askAboutPortConflict,
       onGiveUp: reportBackendGaveUp,
     });
     if (adopted) {
       console.log(`[desktop] reusing the backend already listening on ${PORT}`);
     }
+    console.log(
+      usingLocalModel
+        ? `[desktop] the model runs here: ${model.path}`
+        : "[desktop] using the hosted model"
+    );
   } catch (err) {
     // the conflict was already explained in its own dialog, and the user chose
     // to quit rather than press on

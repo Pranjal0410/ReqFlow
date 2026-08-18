@@ -2,6 +2,10 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 
+// Fixed, so the app is always served from the same origin. localStorage is
+// keyed by origin, and the workspace lives there.
+const PORT = 4179;
+
 // The Expo web export references its bundle as /_expo/static/js/... — an
 // absolute path. Under file:// that resolves against the filesystem root and
 // the page loads blank, which is the usual way wrapping a web build in Electron
@@ -73,11 +77,38 @@ function startStaticServer(root) {
     });
   });
 
+  // The origin the app is served from, which is also the key the browser files
+  // localStorage under.
+  //
+  // This used to ask the OS for any free port, so that the app could never
+  // collide with whatever the developer was running. It could not — and it also
+  // came up on a different origin every launch, which meant the workspace was
+  // empty every time: no tabs, no variables, no scanned project, no saved
+  // token. Everything the app takes care to persist was written to an address
+  // it would never visit again. A fixed port keeps the origin stable, which is
+  // what makes any of that survive.
+  return listenOn(server, PORT).catch((err) => {
+    if (err && err.code !== "EADDRINUSE") throw err;
+    // Something else holds it. Falling back keeps the app working, at the cost
+    // of this session starting from an empty workspace — said out loud rather
+    // than left to look like the app forgetting things at random.
+    console.warn(
+      `[reqflow] port ${PORT} is taken, so this window gets a temporary address ` +
+        `and will not see anything saved by earlier sessions.`
+    );
+    return listenOn(server, 0);
+  });
+}
+
+function listenOn(server, port) {
   return new Promise((resolve, reject) => {
-    server.on("error", reject);
-    // port 0 asks the OS for a free one, so the app can never collide with
-    // whatever else the developer has running
-    server.listen(0, "127.0.0.1", () => {
+    const onError = (err) => {
+      server.removeListener("error", onError);
+      reject(err);
+    };
+    server.once("error", onError);
+    server.listen(port, "127.0.0.1", () => {
+      server.removeListener("error", onError);
       resolve({
         url: `http://localhost:${server.address().port}`,
         close: () => new Promise((done) => server.close(done)),

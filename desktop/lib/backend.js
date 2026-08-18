@@ -195,7 +195,7 @@ class Backend {
   // one launch of the child, wired up for output and for its own death. Called
   // again, unchanged, when the backend has to be brought back.
   _spawn(onExit) {
-    const { entry, cwd, apiKey } = this.options;
+    const { entry, cwd, apiKey, modelPath } = this.options;
 
     const child = fork(entry, [], {
       cwd,
@@ -205,6 +205,10 @@ class Backend {
         // child would boot a second copy of the app instead of the server.
         ELECTRON_RUN_AS_NODE: "1",
         ...(apiKey ? { GEMINI_API_KEY: apiKey } : {}),
+        // A model file to load turns the backend's provider switch over. It is
+        // passed rather than written to a config file, so a restart of the child
+        // after a crash carries the same answer without re-reading anything.
+        ...(modelPath ? { LLM_PROVIDER: "embedded", LOCAL_MODEL_PATH: modelPath } : {}),
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });

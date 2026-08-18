@@ -50,9 +50,14 @@ function buildBackend() {
 }
 
 // The repo's node_modules is 121MB, nearly all of it jest, typescript and tsx —
-// none of which the server uses at runtime. Installing the five production
+// none of which the server uses at runtime. Installing only the production
 // dependencies into a staging copy is the difference between a 250MB app and a
 // 110MB one.
+//
+// optionalDependencies comes along too, because node-llama-cpp is in there and
+// it is what runs the model inside the app. It is optional in the sense that a
+// machine without a prebuilt binary can still install and use the hosted model,
+// not in the sense that the app can be shipped without it.
 function stageBackend() {
   fs.rmSync(STAGING, { recursive: true, force: true });
   fs.mkdirSync(STAGING, { recursive: true });
@@ -69,6 +74,7 @@ function stageBackend() {
         private: true,
         main: "dist/index.js",
         dependencies: pkg.dependencies,
+        optionalDependencies: pkg.optionalDependencies,
       },
       null,
       2
@@ -79,6 +85,16 @@ function stageBackend() {
   // whole exercise worthwhile.
   run("npm", ["install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"], STAGING);
   console.log(`\nstaged backend: ${size(STAGING)} (repo node_modules is ${size(path.join(BACKEND, "node_modules"))})`);
+
+  // llama.cpp ships as a native binary per platform, and it is most of what the
+  // staged backend now weighs. Said out loud because an installer that grew by
+  // a hundred megabytes should not do so silently.
+  const llama = path.join(STAGING, "node_modules", "node-llama-cpp");
+  if (fs.existsSync(llama)) {
+    console.log(`  of which node-llama-cpp: ${size(llama)} — this is what runs the model in-process`);
+  } else {
+    console.log("  node-llama-cpp did not install: this build can only use the hosted model");
+  }
 }
 
 /* -------------------------------------------------------------- frontend */

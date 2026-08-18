@@ -14,12 +14,19 @@ function serve(handler) {
 
 const close = (server) => new Promise((resolve) => server.close(resolve));
 
-function portIsFree() {
-  return new Promise((resolve) => {
+// Two different questions, and the guard used to ask the wrong one. Binding
+// 127.0.0.1 can succeed while a server started on the dual-stack wildcard is
+// already answering there, so a running ReqFlow passed the check and then
+// turned up as the answer to "what is on this port" — six assertion failures
+// where one clear sentence belonged. The guard now asks what the tests ask.
+async function portIsFree() {
+  const canBind = await new Promise((resolve) => {
     const probe = net.createServer();
     probe.once("error", () => resolve(false));
     probe.listen(PORT, "127.0.0.1", () => probe.close(() => resolve(true)));
   });
+  if (!canBind) return false;
+  return (await inspectPort()) === "free";
 }
 
 let servers = [];
@@ -32,7 +39,8 @@ const track = async (handler) => {
 beforeAll(async () => {
   if (!(await portIsFree())) {
     throw new Error(
-      `port ${PORT} is in use, so these tests cannot bind it. Stop whatever is listening and run them again.`
+      `Something is already answering on port ${PORT} — most likely ReqFlow itself. ` +
+        `These tests bind the real port because that is what they are about, so stop it and run them again.`
     );
   }
 });

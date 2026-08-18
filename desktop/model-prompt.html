@@ -1,0 +1,208 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>ReqFlow</title>
+<style>
+  /* the same palette as the app, so this does not read as a system dialog
+     that wandered in from somewhere else */
+  :root {
+    --bg: #0a0a0a;
+    --surface: #18181a;
+    --surface2: #111113;
+    --border: #1f1f22;
+    --text: #ededf0;
+    --dim: #808090;
+    --muted: #a1a1aa;
+    --ok: #4ade80;
+    --err: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 26px;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  h1 { margin: 0 0 6px; font-size: 16px; font-weight: 500; }
+  p { margin: 0 0 14px; color: var(--dim); }
+  a { color: var(--text); cursor: pointer; }
+
+  .option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+  }
+  .option:hover { background: var(--surface); }
+  .option[aria-pressed="true"] { border-color: var(--muted); background: var(--surface); }
+  .option .name { font-weight: 500; }
+  .option .size { float: right; color: var(--dim); font: 11px ui-monospace, Menlo, monospace; }
+  .option .note { display: block; margin-top: 3px; color: var(--dim); font-size: 11px; }
+
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+  .msg { flex: 1; font-size: 11px; color: var(--err); min-height: 16px; }
+  button.go {
+    padding: 9px 18px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--text);
+    color: var(--bg);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  button.go:disabled { opacity: 0.45; cursor: default; }
+  button.ghost {
+    padding: 9px 14px;
+    border: 0;
+    background: transparent;
+    color: var(--dim);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  /* progress. the numbers here are read off the download itself, never
+     estimated, which is why there is no "time remaining" */
+  #progress { display: none; }
+  .bar {
+    height: 6px;
+    background: var(--surface);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 14px 0 8px;
+  }
+  .bar span { display: block; height: 100%; width: 0; background: var(--text); }
+  .counts { color: var(--dim); font: 11px ui-monospace, Menlo, monospace; }
+  .done { color: var(--ok); }
+</style>
+
+<div id="choose">
+  <h1>Where should ReqFlow run its model?</h1>
+  <p>
+    The model reads your project and writes endpoints for it. Run it on this
+    machine and your code never leaves the laptop, and there is no round trip to
+    wait on. It downloads once.
+  </p>
+
+  <div id="models"></div>
+
+  <button class="option" id="custom">
+    <span class="name">I already have a .gguf file</span>
+    <span class="note">Point ReqFlow at a model you have downloaded yourself.</span>
+  </button>
+
+  <button class="option" id="cloud">
+    <span class="name">Use Gemini instead</span>
+    <span class="note">Nothing to download. Needs an API key, and your code is sent to Google.</span>
+  </button>
+
+  <div class="row">
+    <div class="msg" id="msg"></div>
+    <button class="go" id="start" disabled>Download</button>
+  </div>
+</div>
+
+<div id="progress">
+  <h1 id="downloading">Downloading</h1>
+  <p id="subtitle">
+    This happens once. After it, ReqFlow never calls out to generate code.
+  </p>
+  <div class="bar"><span id="fill"></span></div>
+  <div class="counts" id="counts">starting…</div>
+  <div class="row">
+    <div class="msg" id="msg2"></div>
+    <button class="ghost" id="cancel">Cancel</button>
+  </div>
+</div>
+
+<script>
+  const api = window.reqflow;
+  let selected = null;
+
+  const el = (id) => document.getElementById(id);
+  const gb = (n) => `${(n / 1e9).toFixed(1)} GB`;
+
+  function select(id) {
+    selected = id;
+    for (const button of document.querySelectorAll(".option")) {
+      button.setAttribute("aria-pressed", String(button.dataset.id === id));
+    }
+    el("start").disabled = false;
+    // the button says what it will do, since two of these choices download
+    // nothing at all
+    el("start").textContent =
+      id === "cloud" ? "Use Gemini" : id === "custom" ? "Choose file…" : "Download";
+  }
+
+  api.models().then(({ catalogue, partial }) => {
+    const host = el("models");
+    for (const model of catalogue) {
+      const button = document.createElement("button");
+      button.className = "option";
+      button.dataset.id = model.id;
+      const waiting = partial[model.id] || 0;
+      button.innerHTML =
+        `<span class="size">${gb(model.approxBytes)}</span>` +
+        `<span class="name">${model.label} · ${model.parameters}</span>` +
+        `<span class="note">${model.note}${
+          waiting ? ` — ${gb(waiting)} already downloaded, will resume.` : ""
+        }</span>`;
+      button.onclick = () => select(model.id);
+      host.appendChild(button);
+    }
+    // the default is preselected rather than left blank: a first launch that
+    // makes you read three options before anything happens is a worse first
+    // launch than one with a sensible answer already filled in
+    select(catalogue[0].id);
+  });
+
+  el("custom").dataset.id = "custom";
+  el("cloud").dataset.id = "cloud";
+  el("custom").onclick = () => select("custom");
+  el("cloud").onclick = () => select("cloud");
+
+  el("start").onclick = async () => {
+    if (!selected) return;
+    el("msg").textContent = "";
+
+    if (selected === "cloud") return api.chooseCloud();
+
+    if (selected === "custom") {
+      const result = await api.chooseFile();
+      if (!result.ok) el("msg").textContent = result.error || "";
+      return;
+    }
+
+    el("choose").style.display = "none";
+    el("progress").style.display = "block";
+    el("downloading").textContent = `Downloading ${selected}`;
+
+    const result = await api.download(selected);
+    if (!result.ok) {
+      // back to the choice rather than a dead end: the usual reason is a
+      // connection that dropped, and the part file means retrying resumes
+      el("progress").style.display = "none";
+      el("choose").style.display = "block";
+      el("msg").textContent = result.error || "the download did not finish";
+    }
+  };
+
+  el("cancel").onclick = () => api.cancelDownload();
+
+  api.onProgress(({ received, total }) => {
+    const pct = total ? Math.min(100, (received / total) * 100) : 0;
+    el("fill").style.width = `${pct}%`;
+    el("counts").textContent = total
+      ? `${gb(received)} of ${gb(total)}  ·  ${pct.toFixed(0)}%`
+      : `${gb(received)} downloaded`;
+  });
+</script>

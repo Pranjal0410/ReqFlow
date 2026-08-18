@@ -4,236 +4,189 @@ An API client that reads your project and figures out what endpoints you have,
 so you are not typing URLs into Postman by hand every time.
 
 Point it at a Node project folder. It scans the code, lists the routes it finds,
-and you can send requests to any of them. There is also an agent that runs the
-requests for you and drops each one into a tab with its real response.
+and you can send requests to any of them. There is also an agent that writes new
+endpoints into the project — and then runs them, so you find out whether they
+work rather than being told they were written.
 
-Built with Express and TypeScript on the backend, Expo and React Native on the
-frontend. It runs in the browser, and as a desktop app on macOS, Windows and
-Linux; it is meant to run on a phone too.
+Express and TypeScript on the backend, Expo and React Native on the frontend. It
+runs in the browser and as a desktop app on macOS, Windows and Linux.
+
+## The loop
+
+```
+describe the change  →  ReqFlow writes it in your project's style
+                     →  you read a diff of every line it would touch
+                     →  Apply
+                     →  ReqFlow reloads your project
+                     →  it calls the new endpoint and reads the result back
+                     →  one honest verdict
+```
+
+The last two steps are the point. A generator that writes code and calls that
+success has told you nothing: the file parses, the server boots, and the endpoint
+answers "is not a function". So the verdict has three values and only one is
+green:
+
+| | |
+| --- | --- |
+| **Applied, verified** | the code is in, the server took it, the endpoint answered as it should |
+| **Applied, not working** | the code is in and the endpoint did not work — with the status it returned |
+| **Applied, not verified** | the code is in and there was no way to check: nothing was listening, or you stopped it |
 
 ## What it does
 
-**Scans a project.** Walks the folder, keeps files that look like they define
-routes, and asks Gemini to pull out the method, path and expected body for each
-one. The body is filled from what the code actually requires, reading its
-validators, enums and defaults, so a scanned POST can usually be sent as it
-arrives rather than edited field by field. Where a value has no source in the
-code, an id of another record for instance, the editor says which fields are
-still standing in for a type. Everything it finds shows up in the sidebar, grouped by path. Re-scanning
-the same folder is served from a cache keyed on the contents of the files, so
-edited code still gets a fresh look but an unchanged project does not spend the
-quota twice.
+**Scans a project.** Walks the folder, keeps the files that define routes, and
+reads the method, path and expected body out of them. The body comes from what
+the code actually requires, not from a guess.
 
-**Sends requests.** Method, URL, query parameters, headers, JSON body, bearer
-token. Multiple tabs so you can keep a few requests open at once. Export any of
-them as a runnable curl command, or the whole scan as an OpenAPI document.
+**Sends requests.** Tabs, history, variables with `{{name}}`, saved examples per
+endpoint with credentials stripped before anything reaches disk, assertions, and
+a timing breakdown measured on the backend rather than estimated.
 
-A scanned route like `/api/incidents/:id` opens with the placeholder still in
-it. Filling it in under Params substitutes it on the way out, so the url keeps
-the `:id` and can be pointed at a different record later. Send stays disabled
-until the placeholder has a value, rather than issuing a request that can only
-404.
+**Writes endpoints.** The model answers with a structured plan, not text to
+paste. Paths are snapped to the project's real files — an endpoint about
+incidents is written against your incidents router, not whichever router scored
+highest. Your data models are read too, so the code queries fields your schema
+actually declares. Exports are merged rather than replaced, imports the file
+already has are dropped, and re-applying the same endpoint updates it instead of
+declaring it twice.
 
-**Carries the token for you.** When a successful response carries something that
-looks like a credential, it is saved as `{{token}}` without being asked, and the
-response header says so. Every tab can then use it, instead of the value being
-read out of the body and pasted into each one; there is a copy button next to it
-for the times you want it somewhere else. A failed response cannot overwrite a
-working token.
+**Runs what it wrote.** ReqFlow starts your project if nothing is listening,
+restarts the one it started, and leaves a server you started yourself alone. An
+endpoint that takes an `:id` gets a real one, looked up from your own running
+server — signing in first when the list needs it — so `PATCH /incidents/:id/x`
+can actually be checked. Ids in the request body are looked up the same way,
+because an invented one makes a correct endpoint answer 400.
 
-**Shows what actually happened.** Status, response headers, syntax highlighted
-JSON, and a timing breakdown. The timings are measured, not estimated: the
-backend reads the response as a stream so the wait for the first byte and the
-time spent reading the body are two separate numbers. If the server you are
-testing sends a `Server-Timing` header, whatever it reports about itself, its
-controller, its queries, shows up in the trace as well, tagged `reported`
-because those numbers are its word rather than our measurement.
-
-**Reads each response against the last ones.** A number on its own does not tell
-you whether 826 ms is normal, so samples are kept per endpoint and the new run is
-shown next to the median of the ones before it, broken down by phase. "Slower" is
-not useful; ttfb up while download is flat, or a reported `db` span going from
-8 ms to 200 ms, is. Nothing is claimed under three prior runs, and a run has to be
-both proportionally and absolutely slower before it is called out, or 2 ms to
-6 ms reads as a 3x regression.
-
-**Runs assertions.** Write checks like `status equals 200` or
-`data.token exists` and they run on every send. **Run all** sends every open tab
-one at a time and reports how they did together.
-
-**Keeps variables.** Anything written as `{{name}}` in a url, header or body is
-resolved just before the request goes out, so a token fetched once works in every
-tab instead of living in whichever one logged in. A variable whose name looks
-like a credential is masked and kept out of the saved workspace, which also means
-its value does not survive closing the browser: a request that still refers to it
-says so rather than sending an empty header. Once a token is saved, routes opened
-from the sidebar carry `Bearer {{token}}` already, so they do not each have to be
-authorised by hand.
+**Says what happened.** The verdict panel lists what was written, which server
+answered, which record was used, and every request with its status. When
+something fails it says what to do about that particular status rather than
+"read your server's output" for all of them.
 
 ## The agent
 
-It acts on what you ask without checking in first, and has five tools:
+Ask for an endpoint and it writes one. Ask it to test the endpoints you have and
+it sends real requests, opening a tab for each with its response already in it.
+It logs in when a route needs auth, saves the token as `{{token}}` so your tabs
+keep working, and retries the request rather than reporting a 401 it could have
+avoided. Every action is listed under the reply.
 
-| Tool | What it does |
-| --- | --- |
-| `send_request` | Actually calls an endpoint |
-| `create_request` | Fills a tab and leaves it for you to send |
-| `create_assertions` | Writes checks into the Tests panel |
-| `set_variable` | Saves a value as `{{name}}` for every tab |
-| `generate_code` | Writes an endpoint the project does not have yet |
-
-Only the first touches the network, so the rest still work with read-only mode
-on. It works through login flows, so protected routes are fine.
-
-**Writes endpoints in your project's own style.** Asked for one the project does
-not have, it reads the files it does have and writes the new route to match
-them, naming the files it took the style from so the claim can be checked. The
-code is shown for you to copy, never written into your files: putting code into
-someone's repository is a different decision from generating it, and not one
-this app makes.
-
-It opens a tab for the new endpoint too, and any tab it opens for a route the
-scan does not have is listed in the sidebar under **Generated** — apart from the
-scanned routes and dimmed, because the server does not serve them yet. A tab for
-an endpoint that does exist is not listed there, since saying your own code is
-missing something it has would be worse than saying nothing.
-
-Clicking one of those rows goes back to the tab the agent already opened rather
-than drafting a second copy of the same request. Scan the project again after
-pasting the code in and the endpoint moves up into the normal list, which is the
-sidebar noticing that the suggestion has become real. They last for the session
-only: one that came back after a restart would be indistinguishable from an
-endpoint that had been there all along.
-
-Everything it sends lands in a tab with the real response already attached,
-rather than being readable only in the chat column. Nothing is re-run to show you
-the result, which matters for a POST. A run that touches a dozen endpoints opens
-a dozen tabs, and the bar only shows about four, so clicking a request in the log
-under the reply selects its tab.
-
-Two limits, neither of which asks you anything:
-
-- It can only reach loopback and private addresses. This is enforced in the
-  proxy, not in a route handler, so the agent cannot go around it, and every
-  redirect hop is checked too.
-- 30 actions per conversation. Clearing the chat starts a fresh budget. A call
-  that did nothing, a collapsed duplicate or a rejected field, costs none of it.
-
-Under every reply is a list of what really happened, taken from the backend
-rather than from the model, so you can check the summary against it. Sent and
-drafted stay distinguishable, and a blocked attempt is still listed so you know
-it was tried.
+It writes files only while **Can edit files** is on. With it off, only GET and
+login requests go out.
 
 ## Setup
 
-You need Node 18 or newer and a Gemini API key from
-[aistudio.google.com](https://aistudio.google.com/apikey).
-
 ```bash
 # backend
-cd backend
-npm install
-cp .env.example .env      # then paste your key into GEMINI_API_KEY
-npm run dev               # http://localhost:4000
+cd backend && npm install
+cp .env.example .env          # add GEMINI_API_KEY
+npm run dev
 
 # frontend, in a second terminal
-cd frontend
-npm install
-npm run web               # http://localhost:8081
+cd frontend && npm install
+npx expo start --web
 ```
 
-Hit **Scan Project** and give it a folder path. As you type it, ReqFlow reads
-the folder, tells you how many route files it found, and fills in the base url
-from the port the project declares, checking `.env`, then the package scripts,
-then the code, and saying which one it took it from. Confirm that and scan.
-
-The base url is required rather than defaulted, because a scan that leaves it
-at a guess points every route it just found at whatever happens to be running
-on that port. It is your API, not ReqFlow: port 4000 is ReqFlow's own backend,
-so pointing at it 404s everything.
-
-On web the frontend asks whatever host served the page for the API, so changing
-networks cannot break it. Running on a device is the one case that needs an
-address written down, since `localhost` there is the phone: set `DEV_IP` in
-`frontend/src/config.ts`.
+The backend listens on 4000. Point **Base URL** at the server you want to
+exercise, then **Scan Project** at its folder.
 
 ### As a desktop app
 
-Both halves also run in one window, with no terminal and no key file to set up:
-
 ```bash
-cd desktop
-npm install
-npm run start             # or npm run build for a .dmg
+cd desktop && npm install && npm run build
 ```
 
-It is the same Express server and the same web build, wrapped in Electron and
-nothing more — neither knows it is being hosted, and both still run on their own
-exactly as above. `desktop/README.md` covers packaging, the first-open steps on
-macOS, and the Windows and Linux builds.
+Builds a DMG for macOS; `npm run build:win` and `build:linux` for the others. It
+asks for an API key on first launch and stores it encrypted through the OS
+keychain. `desktop/README.md` covers packaging and first-open on macOS.
+
+### Running the model on your machine
+
+Set `LLM_PROVIDER=embedded` with a `.gguf` path, or `local` with an
+OpenAI-compatible runtime you already have. Nothing leaves the machine. It is an
+offline option rather than a faster one — the benchmark in `OVERVIEW.md` has the
+numbers.
 
 ## Tests
 
 ```bash
-cd backend && npm test     # 143
-cd frontend && npm test    # 93
-cd desktop && npm test     # 35
+cd backend && npm test     # 375
+cd frontend && npm test    # 134
+cd desktop && npm test     # 59
 ```
 
-The backend covers the proxy, the target guard, the analyze route and its cache,
-the Server-Timing parser, the OpenAPI builder, the port detector, and the
-agent's tools including the action cap. They spin up their own throwaway server instead of calling a
-public API, and Gemini is mocked, so they run offline and cost nothing.
+The backend covers the proxy, the target guard, the scan and its cache, the
+Server-Timing parser, the OpenAPI builder, the port detector, and the agent's
+tools. Writing into a project has its own set, since that is the part that can
+lose someone's work: a path that climbs out of the project folder is refused,
+new code lands above the trailing export rather than after it, a non-git folder
+gets a backup and a git one does not, and a file that changed between the preview
+and the apply stops the write. Verification is covered end to end against a real
+server, including all three ways ReqFlow can relate to it. Gemini is mocked, so
+they run offline and cost nothing.
 
-The frontend suite is limited to `src/lib`: variables, query and path
-parameters, url normalisation, the timing comparison, and which generated
-endpoints belong in the sidebar. Components would need a react-native renderer,
-which those files do not justify yet.
+The frontend suite covers `src/lib`: variables, query and path parameters, url
+normalisation, timings, what a saved example keeps, and what survives a restart.
+The redaction tests are the ones worth reading — they decide whether a token
+reaches disk.
 
-The desktop suite covers what the wrapper adds: deciding whether the server on
-port 4000 is ours to adopt or a stranger to warn about, restarting a backend
-that dies, and where the API key is stored. Those bind the real port, so nothing
-else can be listening on 4000 while they run.
+The desktop suite covers what the wrapper adds: whether the server on port 4000
+is ours to adopt or a stranger to warn about, restarting a backend that dies,
+where the key is stored, resumable model downloads, and that the app is always
+served from the same origin — a different one each launch meant an empty
+workspace every time. Those bind real ports, so nothing else may be listening on
+4000 or 4179 while they run.
 
 ## How it is put together
 
 ```
-backend/
-  routes/      analyze, proxy, ai-chat, generate
-  services/    fileReader, gemini, openapi, portDetector, proxy, serverTiming,
-               targetGuard, codegen, styleReference, frameworkRoutes
-frontend/
-  components/  sidebar, tabs, request builder, response viewer, trace, agent
-  lib/         assertions, persistence, url, variables, query params,
-               path params, placeholders, timings, generated routes
-desktop/       the same two halves in one window, see desktop/README.md
+backend/     express + typescript. scanning, the agent, code generation,
+             applying, running your project, verifying
+frontend/    expo + react native web. tabs, diff review, verdicts, settings
+desktop/     electron wrapper. spawns the backend, serves the frontend,
+             holds the key
 ```
 
-Requests go through the backend rather than straight from the browser, which
-gets around CORS on the servers you are testing and is what lets the agent send
-anything at all.
+`OVERVIEW.md` has the architecture, the model benchmark, and the bugs the
+benchmark found in ReqFlow itself.
 
-The proxy only forwards to loopback and private addresses. Without that, anyone
-on your network could point it at an internal host and use your machine as a
-relay. The check parses the address instead of matching a prefix, since
-`192.168.evil.com` is a domain anybody can register, and it runs again on every
-redirect, since a local server answering 302 with a public address would
-otherwise walk straight through it.
+## Security
 
-Your workspace is saved as you go. Credentials are kept apart from it: header
-values and variables that look like secrets go to sessionStorage on web and the
-OS keystore on a device, so a reload keeps you signed in but closing the browser
-does not leave a token on disk. Responses are not saved, because a stored one
-would sit next to a request that has not been sent this session.
+Requests are proxied through the backend, which refuses anything that is not a
+loopback or private address. Generated files are confined to the project folder;
+a path that resolves outside it is refused. Saved examples have their
+credentials removed before they are written. The API key is stored through the
+OS keychain in the desktop app, and in `backend/.env` otherwise — neither is ever
+committed.
+
+## Troubleshooting
+
+**The endpoint 404s right after applying.** Your server is running the code from
+before the write. ReqFlow only reloads a server it started; restart yours.
+
+**The server stopped right after applying.** The message says so when the server
+was answering before and is not now. Undo with git, or from the `.reqflow.bak`
+copy if the project is not a repository.
+
+**"needs a login before it will list anything".** ReqFlow could not read the
+collection it needed to find a record. Ask the agent to log in, then apply again.
+
+**The model rejected the key.** Check `GEMINI_API_KEY` in `backend/.env`, or open
+Settings and press Re-check, which makes a real call rather than reading the file.
 
 ## Config
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | required | Used by the scan and the agent |
+| `LLM_PROVIDER` | `gemini` | `embedded` runs the model in-process, `local` uses a runtime you already have |
+| `GEMINI_API_KEY` | required for `gemini` | Used by the scan and the agent |
 | `GEMINI_ANALYZE_MODEL` | `gemini-3.1-flash-lite` | Model for scanning |
 | `GEMINI_CHAT_MODEL` | `gemini-3.1-flash-lite` | Model for the agent |
+| `GEMINI_CODEGEN_MODEL` | `gemini-3.1-flash-lite` | Model for writing endpoints |
+| `LOCAL_MODEL_PATH` | set by the app | The `.gguf` loaded when `LLM_PROVIDER=embedded` |
+| `LOCAL_CONTEXT_TOKENS` | `8192` | Context for the embedded model; larger costs memory |
+| `LOCAL_MODEL` | see `.env.example` | Model name when `LLM_PROVIDER=local` |
+| `LOCAL_MODEL_URL` | `http://localhost:11434/v1` | Where that runtime listens |
 
-Both default to a lite model on purpose. `gemini-3.5-flash` allows 20 requests a
-day on the free tier, and the agent spends one per tool round, so a single run
-that tests a dozen endpoints uses it all up.
+The defaults are a lite model on purpose: the free tier caps requests per day
+per model, and the agent spends one per tool round.

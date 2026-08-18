@@ -141,10 +141,12 @@ desktop/
   main.js              window, lifecycle, shutdown
   preload.js           the key prompt's only bridge; the app window gets none
   key-prompt.html      first-launch key entry
+  model-prompt.html    first-launch engine choice and download progress
   lib/
     backend.js         spawn, health-poll, adopt, restart, stop
     staticServer.js    serves frontend/dist over http
     apiKey.js          read and write the key, encrypted where it can be
+    model.js           the local model: catalogue, resumable download, choice
   scripts/
     build.js           backend compile, dependency staging, web export
     prepare.js         builds only what is missing, for npm run start
@@ -152,6 +154,41 @@ desktop/
                        unsigned rather than damaged
   build/               electron-builder output, not committed
   staging/             production-only copy of the backend, not committed
+```
+
+## The model that runs here
+
+This is the reason ReqFlow is a desktop app rather than only a web page: the
+model can live where the code does. The backend loads the weights into its own
+process through llama.cpp, so there is no daemon to install, no second program to
+keep alive and no port to defend. Generating an endpoint, once the weights are
+there, involves no network at all.
+
+The first launch asks where the model should run before it asks for an API key,
+because the answer decides whether a key is needed at all. Someone who runs the
+model here is never asked for a credential they will never use.
+
+**Nothing downloads on its own.** The window shows what it is about to fetch and
+how big it is, and the download only starts from a button. It is resumable: the
+bytes go to a `.part` file and only take the model's real name once the whole
+thing has arrived, so an interrupted download is something to carry on with
+rather than start again, and a truncated file is never loaded as a model.
+
+What arrives is checked for the four bytes a `.gguf` begins with. The likeliest
+wrong file is an HTML error page saved under the right name, and finding that out
+at the first scan is finding it out too late to say anything useful.
+
+Choices are kept in `model.json` in the user data directory, next to the
+encrypted key — it names a model rather than holding a secret, so it is a plain
+file. Deleting it makes the next launch ask again. A model that was chosen and
+has since gone missing, deleted or on a drive that is not plugged in, is asked
+about again rather than handed to the backend to fail on.
+
+```
+~/Library/Application Support/ReqFlow/
+  model.json                    which engine, and which model
+  models/*.gguf                 the weights, once downloaded
+  gemini-key.enc                the key, if one was given
 ```
 
 ## Known limitations
@@ -168,3 +205,10 @@ desktop/
   quit rather than starting half-working.
 - **The window is a browser**, so DevTools, zoom and text selection behave the
   way they do on the web, not the way a native Mac app would.
+- **The local model makes the app much larger.** llama.cpp ships as a native
+  binary per platform, and the weights are gigabytes on top of that. The
+  installer stays small — the weights are fetched on first launch, not built in —
+  but the disk they end up on is the user's.
+- **A local scan is slower than a hosted one**, and a large project is a minute
+  of work rather than a few seconds. It also runs in batches, because a laptop's
+  context will not hold a whole project the way a hosted model's does.

@@ -1,7 +1,9 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
 import { colors } from "../theme/colors";
-import { radius, shadow } from "../theme/tokens";
+import { radius, shadow, transition } from "../theme/tokens";
+import Icon from "./Icon";
+import Logo from "./Logo";
 
 interface Props {
   projectName: string;
@@ -10,9 +12,23 @@ interface Props {
   target: string | null;
   // true up, false unreachable, null not checked yet or no target
   targetUp: boolean | null;
+  // how many standing rules are switched on. shown as a number rather than a
+  // dot, because "the agent is following three rules you cannot see from here"
+  // is the thing worth knowing at a glance.
+  instructionCount: number;
+  onOpenInstructions: () => void;
+  onOpenSettings: () => void;
 }
 
-export default function TopBar({ projectName, routeCount, target, targetUp }: Props) {
+export default function TopBar({
+  projectName,
+  routeCount,
+  target,
+  targetUp,
+  instructionCount,
+  onOpenInstructions,
+  onOpenSettings,
+}: Props) {
   // only http is dropped. leaving https visible is what tells you the tab is
   // asking for a scheme the server does not speak, which otherwise looks
   // identical to the address that works.
@@ -28,32 +44,58 @@ export default function TopBar({ projectName, routeCount, target, targetUp }: Pr
 
   return (
     <View style={styles.container}>
-      {/* left: project info */}
+      {/* left: the product, then the project. The first initial of whatever
+          folder was scanned is not a logo — it changed identity with the
+          project, so the app had no mark of its own anywhere. */}
       <View style={styles.left}>
-        <View style={styles.icon}>
-          <Text style={styles.iconText}>
-            {projectName.charAt(0).toUpperCase()}
-          </Text>
+        <View style={styles.icon} accessibilityLabel="ReqFlow">
+          <Logo size={17} color={colors.bg} />
         </View>
         <View>
-          <Text style={styles.projectName}>{projectName || "ReqFlow"}</Text>
-          <Text style={styles.projectType}>
-            {routeCount > 0
-              ? `${routeCount} endpoint${routeCount === 1 ? "" : "s"}`
-              : "nothing scanned yet"}
+          {/* The product first, the project under it. Until now the header
+              showed only the scanned folder's name, so the app never said what
+              it was — a first launch answered "what project is this" and left
+              "what is this" to the window title. */}
+          <Text style={styles.productName}>ReqFlow</Text>
+          <Text style={styles.projectType} numberOfLines={1}>
+            {projectName && projectName !== "ReqFlow" ? projectName : "no project yet"}
+            {routeCount > 0 ? ` · ${routeCount} endpoint${routeCount === 1 ? "" : "s"}` : ""}
           </Text>
         </View>
       </View>
 
       {/* center: current section. the other nav items were dropped because
-          nothing was wired behind them */}
+          nothing was wired behind them. "Explorer" undersold it once the app
+          could write endpoints as well as call them. */}
       <View style={styles.center}>
-        <Text style={[styles.navTab, styles.activeNavTab]}>API Explorer</Text>
+        <Text style={[styles.navTab, styles.activeNavTab]}>API Builder</Text>
       </View>
 
       {/* right: real reachability of the server the active request targets.
           polled through the proxy, so it reflects the actual connection */}
       <View style={styles.right}>
+        <Pressable
+          onPress={onOpenInstructions}
+          style={({ hovered }: any) => [styles.instructions, hovered && styles.instructionsHover]}
+          accessibilityLabel="standing instructions the agent follows"
+        >
+          <Icon name="check" size={11} color={colors.textDim} />
+          <Text style={styles.instructionsText}>
+            {instructionCount > 0
+              ? `${instructionCount} instruction${instructionCount === 1 ? "" : "s"}`
+              : "Instructions"}
+          </Text>
+        </Pressable>
+
+        <Pressable
+          onPress={onOpenSettings}
+          style={({ hovered }: any) => [styles.instructions, hovered && styles.instructionsHover]}
+          accessibilityLabel="settings"
+        >
+          <Icon name="terminal" size={11} color={colors.textDim} />
+          <Text style={styles.instructionsText}>Settings</Text>
+        </Pressable>
+
         <View style={[styles.statusBadge, { backgroundColor: state.tint }]}>
           <View style={[styles.statusDot, { backgroundColor: state.color }]} />
           <Text style={[styles.statusText, { color: state.color }]}>{state.label}</Text>
@@ -87,15 +129,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  iconText: {
-    color: colors.bg,
-    fontWeight: "500",
-    fontSize: 14,
-  },
-  projectName: {
+  productName: {
     color: colors.text,
     fontSize: 13,
     fontWeight: "500",
+    letterSpacing: -0.1,
   },
   projectType: {
     color: colors.textDim,
@@ -138,5 +176,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
+  },
+  instructions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radius.md,
+    ...transition("background-color"),
+  },
+  instructionsHover: {
+    backgroundColor: colors.hover,
+  },
+  instructionsText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
   },
 });

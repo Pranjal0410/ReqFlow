@@ -44,6 +44,11 @@ interface Props {
   onHeadersChange: (h: HeaderRow[]) => void;
   onTestsChange: (tests: TestCase[]) => void;
   onSend: () => void;
+  // how many previous runs of this endpoint are on file. shown as a count
+  // rather than a dot, because whether there is one to compare against or four
+  // is the thing worth knowing before opening the panel.
+  exampleCount: number;
+  onOpenExamples: () => void;
   loading: boolean;
   response: any;
   timingNote?: { text: string; slower: boolean } | null;
@@ -69,6 +74,8 @@ export default function RequestBuilder({
   onHeadersChange,
   onTestsChange,
   onSend,
+  exampleCount,
+  onOpenExamples,
   loading,
   response,
   timingNote,
@@ -191,6 +198,20 @@ export default function RequestBuilder({
           autoCapitalize="none"
           autoCorrect={false}
         />
+
+        {/* nothing is saved by hand, so this is not a "save" button: it is the
+            way back to runs that were kept anyway. hidden at zero rather than
+            shown empty, since a count of none is not worth the width. */}
+        {exampleCount > 0 && (
+          <Pressable
+            style={({ hovered }: any) => [styles.curlBtn, hovered && styles.curlBtnHover]}
+            onPress={onOpenExamples}
+            accessibilityLabel={`${exampleCount} previous runs of this endpoint`}
+          >
+            <Icon name="history" size={14} color={colors.textDim} />
+            <Text style={styles.curlText}>{exampleCount}</Text>
+          </Pressable>
+        )}
 
         <Pressable
           style={({ hovered }: any) => [styles.curlBtn, hovered && styles.curlBtnHover]}

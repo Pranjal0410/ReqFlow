@@ -10,9 +10,13 @@ import {
 import { colors } from "../theme/colors";
 import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
-import { DetectedRoute, HistoryEntry, GeneratedRoute } from "../types";
+import { DetectedRoute, HistoryEntry, GeneratedRoute, RunRecord } from "../types";
 import { Variable, isSecretVariable } from "../lib/variables";
+import { routeKey } from "../lib/generatedRoutes";
 import * as Clipboard from "expo-clipboard";
+
+// how many past requests the sidebar keeps in view
+const RECENT_SHOWN = 3;
 
 interface Props {
   routes: DetectedRoute[];
@@ -31,6 +35,14 @@ interface Props {
   generatedRoutes: GeneratedRoute[];
   onSelectGenerated: (route: GeneratedRoute) => void;
   onClearGenerated: () => void;
+  // routeKey()s the agent wrote source for. those rows open the code; the rest
+  // open their request tab, and two rows that behave differently should not
+  // look identical.
+  generatedWithCode: Set<string>;
+  // the last few applies, so what happened stays readable after the panel that
+  // reported it has been closed
+  runs: RunRecord[];
+  onSelectRun: (run: RunRecord) => void;
 }
 
 export default function Sidebar({
@@ -49,6 +61,9 @@ export default function Sidebar({
   generatedRoutes,
   onSelectGenerated,
   onClearGenerated,
+  generatedWithCode,
+  runs,
+  onSelectRun,
 }: Props) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [confirmReset, setConfirmReset] = React.useState(false);
@@ -87,7 +102,10 @@ export default function Sidebar({
     <View style={styles.container}>
       <View style={styles.header}>
         <View style={styles.titleRow}>
-          <Text style={styles.title}>API Explorer</Text>
+          {/* This said "API Explorer" while the header said "API Builder", so
+              the app gave itself two names on one screen. The panel is a list of
+              endpoints; naming it that leaves exactly one product name visible. */}
+          <Text style={styles.title}>Endpoints</Text>
           <Pressable
             style={({ hovered: h }: any) => [styles.reset, h && styles.resetHover]}
             onPress={() => {
@@ -169,6 +187,7 @@ export default function Sidebar({
                 secureTextEntry={isSecretVariable(v.key)}
               />
               <Pressable
+                accessibilityLabel="remove this variable"
                 style={styles.varRemove}
                 onPress={() => onVariablesChange(variables.filter((_, j) => j !== i))}
               >
@@ -197,7 +216,7 @@ export default function Sidebar({
 
       <TextInput
         style={styles.search}
-        placeholder="Search APIs..."
+        placeholder="Search endpoints"
         placeholderTextColor={colors.textDim}
         value={search}
         onChangeText={setSearch}
@@ -208,7 +227,7 @@ export default function Sidebar({
           <View key={group}>
             <View style={styles.groupHeader}>
               <Text style={styles.groupTitle}>
-                {group.charAt(0).toUpperCase() + group.slice(1)}
+                /{group}
               </Text>
               <Text style={styles.groupCount}>{groupRoutes.length}</Text>
             </View>
@@ -271,6 +290,7 @@ export default function Sidebar({
               <View style={styles.generatedHeaderRight}>
                 <Text style={styles.groupCount}>{filteredGenerated.length}</Text>
                 <Pressable
+                  accessibilityLabel="clear the generated list"
                   style={({ hovered: h }: any) => [styles.clearGenerated, h && styles.routeItemHover]}
                   onPress={onClearGenerated}
                 >
@@ -289,6 +309,11 @@ export default function Sidebar({
                   (h || pressed) && styles.routeItemHover,
                 ]}
                 onPress={() => onSelectGenerated(route)}
+                accessibilityLabel={
+                  generatedWithCode.has(routeKey(route.method, route.path))
+                    ? `${route.method} ${route.path}, opens the code the agent wrote`
+                    : `${route.method} ${route.path}, opens the request tab`
+                }
               >
                 {/* the method keeps its colour: it is still a GET or a POST,
                     and the row is dimmed by the path and the tag instead */}
@@ -306,13 +331,79 @@ export default function Sidebar({
                 {/* the same mark the agent panel carries, rather than the word
                     "generated" spelled out: at this width the tag took enough
                     of the row to cut the path down to "/api/incide…", and the
-                    path is the part being read */}
-                <View
-                  style={styles.generatedTag}
-                  accessibilityLabel="written by the agent, not in the project yet"
-                >
-                  <Icon name="sparkle" size={10} color={colors.textDim} />
+                    path is the part being read.
+                    A row with source behind it opens that source instead of a
+                    tab, so it is marked: same icon, undimmed, which is as much
+                    difference as this width has room for. */}
+                <View style={styles.generatedTag}>
+                  <Icon
+                    name="sparkle"
+                    size={10}
+                    color={
+                      generatedWithCode.has(routeKey(route.method, route.path))
+                        ? colors.textMuted
+                        : colors.textDim
+                    }
+                  />
                 </View>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {/* What ReqFlow did to the project, and whether it worked. The code
+            view says this once and then closes; this is where it stays. Four,
+            because the fifth one back has never been the one anybody wanted. */}
+        {runs.length > 0 && (
+          <View>
+            <View style={styles.groupHeader}>
+              <Text style={styles.groupTitle}>Applied</Text>
+              <Text style={styles.groupCount}>{runs.length}</Text>
+            </View>
+
+            {runs.map((run) => (
+              <Pressable
+                key={run.id}
+                onPress={() => onSelectRun(run)}
+                style={({ hovered: h, pressed }: any) => [
+                  styles.routeItem,
+                  (h || pressed) && styles.routeItemHover,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.runDot,
+                    {
+                      backgroundColor:
+                        run.verdict === "verified"
+                          ? colors.statusOk
+                          : run.verdict === "failed"
+                          ? colors.statusErr
+                          : colors.warning,
+                    },
+                  ]}
+                />
+                <Text
+                  style={[
+                    styles.method,
+                    { color: (colors.method as any)[run.method] || colors.text },
+                  ]}
+                >
+                  {run.method}
+                </Text>
+                <Text style={styles.path} numberOfLines={1}>
+                  {run.path}
+                </Text>
+                {/* the slowest phase, because "it was slow" is only useful with
+                    a where attached */}
+                {run.phases.length > 0 && (
+                  <Text style={styles.runPhase}>
+                    {(
+                      run.phases.reduce((a, b) => (a.ms > b.ms ? a : b)).ms / 1000
+                    ).toFixed(1)}
+                    s
+                  </Text>
+                )}
               </Pressable>
             ))}
           </View>
@@ -333,9 +424,12 @@ export default function Sidebar({
           <View style={styles.historyBlock}>
             <View style={styles.groupHeader}>
               <Text style={styles.groupTitle}>Recent</Text>
-              <Text style={styles.groupCount}>{history.length}</Text>
+              {/* The three most recent, not the whole session. A list that grows
+                  all day pushes the project's own endpoints off the screen, and
+                  the fourth-oldest request is not what anyone comes back to. */}
+              <Text style={styles.groupCount}>{Math.min(history.length, RECENT_SHOWN)}</Text>
             </View>
-            {history.map((h) => (
+            {history.slice(0, RECENT_SHOWN).map((h) => (
               <Pressable
                 key={h.id}
                 style={({ hovered: hv }: any) => [
@@ -361,7 +455,7 @@ export default function Sidebar({
                     { color: h.status > 0 && h.status < 400 ? colors.statusOk : colors.statusErr },
                   ]}
                 >
-                  {h.status || "err"}
+                  {h.status || "no reply"}
                 </Text>
               </Pressable>
             ))}
@@ -648,6 +742,16 @@ const styles = StyleSheet.create({
     // list has to say which is which without being read closely
     color: colors.textDim,
     opacity: 0.75,
+  },
+  runDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  runPhase: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontFamily: "monospace",
   },
   generatedTag: {
     borderWidth: 1,

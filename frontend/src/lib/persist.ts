@@ -1,9 +1,20 @@
 import { Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { onlyRealCode, onlyRealRoutes, onlyRealRuns } from "./restore";
 import * as SecureStore from "expo-secure-store";
-import { DetectedRoute, RequestTab, HistoryEntry } from "../types";
+import {
+  DetectedRoute,
+  RequestTab,
+  HistoryEntry,
+  Instruction,
+  GeneratedEndpoint,
+  GeneratedRoute,
+  ApplyOutcome,
+  RunRecord,
+} from "../types";
 import { Variable, isSecretVariable } from "./variables";
 import { TimingHistory } from "./timings";
+import { ExampleStore, ExampleLimit, coerceLimit } from "./examples";
 
 const KEY = "reqflow.workspace.v1";
 const SECRETS_KEY = "reqflow.secrets.v1";
@@ -33,6 +44,30 @@ export interface Workspace {
   // the folder behind the current scan. the agent reads style from it when
   // generating code, so it has to outlive the modal that collected it.
   projectPath: string;
+  // standing rules the user should not have to repeat. saved here rather than
+  // in sessionStorage: the whole point is that they survive closing the app.
+  // They are preferences about style, not credentials, so the workspace blob is
+  // the right place for them.
+  instructions: Instruction[];
+  // previous runs per endpoint, kept without being asked. credentials are taken
+  // out in examples.ts before anything reaches here, which is what makes storing
+  // a response acceptable at all.
+  examples: ExampleStore;
+  exampleLimit: ExampleLimit;
+  // Work the agent did on this project: the code it wrote, the endpoints it
+  // drafted, and what happened when each was applied.
+  //
+  // These were deliberately kept to the session, on the grounds that a draft
+  // surviving a restart would be indistinguishable from an endpoint that really
+  // exists. That reasoning was half right: the confusion is real, but forgetting
+  // is not what prevents it — the sidebar group is headed "Generated" and says
+  // "not in the project yet" underneath, which says it plainly and keeps saying
+  // it tomorrow. Losing a reviewed diff because the app was closed is the worse
+  // failure, and it is the developer's own work being thrown away.
+  generatedCode: Record<string, GeneratedEndpoint>;
+  generatedRoutes: GeneratedRoute[];
+  appliedSummaries: Record<string, ApplyOutcome>;
+  runs: RunRecord[];
 }
 
 // tabId -> headerName -> value
@@ -182,7 +217,49 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     timings: parsed.timings && typeof parsed.timings === "object" ? parsed.timings : {},
     recentScans: Array.isArray(parsed.recentScans) ? parsed.recentScans : [],
     projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : "",
+    // A first launch starts with the house rules already on, rather than with an
+    // empty panel and a promise that it will learn. They are the conventions the
+    // generated code should follow anyway, they are visible, and every one of
+    // them can be switched off or deleted like any other.
+    instructions: Array.isArray(parsed.instructions)
+      ? parsed.instructions.filter(
+          (i: any) => i && typeof i.text === "string" && i.text.trim()
+        )
+      : defaultInstructions(),
+    examples: parsed.examples && typeof parsed.examples === "object" ? parsed.examples : {},
+    exampleLimit: coerceLimit(parsed.exampleLimit),
+
+    // A workspace saved before these were kept simply has none of them, which is
+    // the same state as a session that generated nothing.
+    generatedCode: onlyRealCode(parsed.generatedCode),
+    generatedRoutes: onlyRealRoutes(parsed.generatedRoutes),
+    appliedSummaries:
+      parsed.appliedSummaries && typeof parsed.appliedSummaries === "object"
+        ? parsed.appliedSummaries
+        : {},
+    runs: onlyRealRuns(parsed.runs),
   };
+}
+
+
+// The conventions worth following in an Express project whether or not anyone
+// says so. Marked as the user's own rather than as something the agent inferred,
+// because the agent did not infer them — they shipped with the app, and claiming
+// otherwise would make the "picked up from what you said" label a lie.
+export function defaultInstructions(): Instruction[] {
+  const at = Date.now();
+  return [
+    "Use camelCase for JSON field names",
+    "Validate the request body and answer 400 with a message naming the missing field",
+    "Match the style of the file being edited: same quotes, same indentation, same export shape",
+    "Return 201 with the created object from a create endpoint",
+  ].map((text, i) => ({
+    id: `default-${i}`,
+    text,
+    enabled: true,
+    at,
+    source: "manual" as const,
+  }));
 }
 
 export async function clearWorkspace(): Promise<void> {

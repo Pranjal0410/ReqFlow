@@ -1,0 +1,20 @@
+<!--
+  The ReqFlow mark.
+
+  One unbroken stroke: a request sets off, travels, dips, and comes back up as a
+  check. That is the product in a single line — a change is not finished when it
+  is written, it is finished when something has actually answered.
+
+  It is one path on purpose. An earlier version drew the origin as a separate
+  dot; at any real size it read as a stray full stop sitting beside a tick, and
+  the flow — the whole point — was not there. The round cap on the leading
+  terminal gives the origin its weight without becoming a second object.
+
+  Drawn on a 24 grid, centred on 12,12, one weight, round caps, currentColor.
+  Legible at 16px, where a second weight or a gradient turns to mush. No robot,
+  no sparkle: the claim is verification, not intelligence.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+     stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M3 12h6.4l3.1 4.4L21 7.4" />
+</svg>

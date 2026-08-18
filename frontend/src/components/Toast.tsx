@@ -53,6 +53,7 @@ export default function Toast({ message, onDismiss }: Props) {
           {message}
         </Text>
         <Pressable
+          accessibilityLabel="dismiss"
           style={({ hovered }: any) => [styles.close, hovered && styles.closeHover]}
           onPress={onDismiss}
         >

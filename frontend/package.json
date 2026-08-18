@@ -1,5 +1,5 @@
 {
-  "name": "frontend",
+  "name": "reqflow-frontend",
   "version": "1.0.0",
   "main": "index.ts",
   "dependencies": {
@@ -30,5 +30,6 @@
     "web": "expo start --web",
     "test": "jest"
   },
-  "private": true
+  "private": true,
+  "description": "ReqFlow's interface: the request builder, the agent, and the review and verification surfaces."
 }

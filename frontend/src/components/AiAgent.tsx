@@ -14,6 +14,7 @@ import { radius, shadow, transition } from "../theme/tokens";
 import { DetectedRoute, ApiResponse, GeneratedEndpoint } from "../types";
 import { CONFIG } from "../config";
 import Icon from "./Icon";
+import { cancelRun } from "../services/api";
 import JsonView from "./JsonView";
 
 // the line shown while a run is under way, built from the last thing it did
@@ -26,6 +27,7 @@ function describeAction(a: ActionLogEntry | undefined): string | null {
   if (a.kind === "draft") return `drafting ${a.method} ${short(a.url)}`;
   if (a.kind === "assertions") return `writing ${a.count} assertion${a.count === 1 ? "" : "s"}`;
   if (a.kind === "code") return `writing ${a.method} ${a.path}`;
+  if (a.kind === "instruction") return "saving an instruction";
   return `saving {{${a.name}}}`;
 }
 
@@ -45,7 +47,8 @@ type ActionLogEntry =
   | { kind: "draft"; method: string; url: string }
   | { kind: "assertions"; count: number }
   | { kind: "variable"; name: string }
-  | { kind: "code"; method: string; path: string; layers: number };
+  | { kind: "code"; method: string; path: string; layers: number }
+  | { kind: "instruction"; text: string };
 
 // a request the agent already ran. it goes straight into a tab so the response
 // lands in the full width viewer, instead of being readable only in the chat
@@ -115,6 +118,12 @@ interface Props {
   // what is in it, so without one there is nothing to imitate.
   projectPath: string | null;
   onGeneratedCode: (generated: GeneratedEndpoint) => void;
+  // standing rules switched on in the workspace, sent with every call
+  instructions: { id: string; text: string }[];
+  onRememberInstruction: (text: string) => void;
+  // ids the backend reported having used, so the panel shows what was really
+  // sent instead of what the frontend meant to send
+  onInstructionsSent: (ids: string[]) => void;
   // reopens the code view for a generation further up the conversation
   onShowCode: () => void;
 }
@@ -134,17 +143,28 @@ export default function AiAgent({
   projectPath,
   onGeneratedCode,
   onShowCode,
+  instructions,
+  onRememberInstruction,
+  onInstructionsSent,
 }: Props) {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
       content:
-        "I act on what you ask without checking in first, and everything I do shows up in a log under each reply. Ask me to:\n\n• test endpoints, one or all of them\n• write a new endpoint in your project's own style\n• set up a request in a tab for you to review and send\n• write assertions into the Tests panel\n• explain or debug a response you are stuck on\n\nI work through login flows too, so protected routes are fine. Three limits: I can only reach localhost and private network addresses, I get 30 actions per conversation, and I never write to your files — generated code is shown for you to copy.",
+        // The first thing anyone reads. It used to be two paragraphs and a
+        // five-item list, which in the first thirty seconds is a wall rather
+        // than an answer. What it has to say is what this can do and what
+        // makes it different — the limits are true but they are not the
+        // opening line.
+        "Ask me to write an endpoint your project does not have, or to test the ones it does.\n\nWhen I write one you get the code, a diff of every line it would change, and — once you apply it — ReqFlow runs the endpoint and tells you whether it actually worked.\n\nI act without checking in first, and everything I do is logged under each reply.",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  // the id of the run in flight, so the Stop above can name it. a ref because
+  // the button reads it at press time rather than at render time.
+  const runIdRef = React.useRef("");
   // autonomous by default. read-only is here for when you want it, not the
   // starting position.
   const [allowWrites, setAllowWrites] = useState(true);
@@ -174,6 +194,7 @@ export default function AiAgent({
     setProgress(null);
 
     const runId = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+    runIdRef.current = runId;
     const poll = setInterval(async () => {
       try {
         const r = await fetch(`${CONFIG.API_BASE}/ai-chat/progress/${runId}`);
@@ -206,7 +227,15 @@ export default function AiAgent({
             .join("\n")}`
         : "\n\nNo project has been scanned yet.";
 
+      // The longest request the app makes, and the one with no way out if it
+      // hangs: the panel would spin on "thinking" forever. Bounded well past a
+      // real generation, so a slow model still finishes and a dead backend does
+      // not leave the developer waiting on nothing.
+      const stopWaiting = new AbortController();
+      const gaveUp = setTimeout(() => stopWaiting.abort(), 180_000);
+
       const res = await fetch(`${CONFIG.API_BASE}/ai-chat`, {
+        signal: stopWaiting.signal,
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -219,6 +248,7 @@ export default function AiAgent({
           runId,
           activeTab,
           variables,
+          instructions,
           history: messages.slice(-6).map((m) => ({
             role: m.role,
             content: m.content,
@@ -226,6 +256,7 @@ export default function AiAgent({
         }),
       });
 
+      clearTimeout(gaveUp);
       const data = await res.json();
 
       // everything the agent sent becomes a tab with its response already in
@@ -259,9 +290,12 @@ export default function AiAgent({
           onSetVariable(action.name, action.value);
         } else if (action.type === "generated_code") {
           onGeneratedCode(action.generated);
+        } else if (action.type === "remember_instruction") {
+          onRememberInstruction(action.text);
         }
       }
 
+      if (Array.isArray(data.instructionsUsed)) onInstructionsSent(data.instructionsUsed);
       if (typeof data.actionsUsed === "number") setActionsUsed(data.actionsUsed);
       if (typeof data.actionLimit === "number") setActionLimit(data.actionLimit);
 
@@ -273,13 +307,18 @@ export default function AiAgent({
       };
 
       setMessages((prev) => [...prev, aiMsg]);
-    } catch (err) {
+    } catch (err: any) {
+      // Three different situations used to read as one sentence about port 4000.
+      // Being told to check a port that is fine is worse than being told nothing.
+      const stopped = err?.name === "AbortError";
       setMessages((prev) => [
         ...prev,
         {
           id: (Date.now() + 1).toString(),
           role: "assistant",
-          content: "couldn't reach the backend. is the server running on port 4000?",
+          content: stopped
+            ? "Stopped waiting — the model did not answer in three minutes. Anything already done is in the log above."
+            : "I could not reach ReqFlow's own backend. It runs on port 4000; check the terminal you started it in.",
         },
       ]);
     } finally {
@@ -403,6 +442,19 @@ export default function AiAgent({
               </View>
             );
           }
+          {/* the rule is quoted rather than counted: a log line saying "saved
+              an instruction" leaves the user to open a panel to find out what
+              the app now believes about them */}
+          if (t.kind === "instruction") {
+            return (
+              <View key={i} style={styles.traceRow}>
+                <View style={styles.traceGutter} />
+                <Text style={styles.traceLine} numberOfLines={2}>
+                  <Text style={styles.traceVerb}>remembered</Text> {t.text}
+                </Text>
+              </View>
+            );
+          }
           return (
             <View key={i} style={styles.traceRow}>
               <View style={styles.traceGutter} />
@@ -441,7 +493,7 @@ export default function AiAgent({
           onPress={() => setAllowWrites(!allowWrites)}
         >
           <Text style={[styles.writeToggleText, allowWrites && styles.writeToggleTextOn]}>
-            {allowWrites ? "writes on" : "read only"}
+            {allowWrites ? "Can edit files" : "Read only"}
           </Text>
         </Pressable>
         {messages.length > 1 && (
@@ -449,10 +501,11 @@ export default function AiAgent({
             style={({ hovered }: any) => [styles.writeToggle, hovered && styles.writeToggleHover]}
             onPress={clearChat}
           >
-            <Text style={styles.writeToggleText}>clear</Text>
+            <Text style={styles.writeToggleText}>Clear</Text>
           </Pressable>
         )}
         <Pressable
+          accessibilityLabel="close the agent panel"
           style={({ hovered }: any) => [styles.closeWrap, hovered && styles.closeWrapHover]}
           onPress={onClose}
         >
@@ -490,6 +543,16 @@ export default function AiAgent({
             <Text style={styles.workingText} numberOfLines={1}>
               {progress || "thinking"}
             </Text>
+            {/* A run can be half a minute, and until this there was no way out
+                of it but to wait. Stopping is honoured between actions, so what
+                has already been done stays done and nothing is left half way. */}
+            <Pressable
+              onPress={() => cancelRun("ai-chat", runIdRef.current)}
+              style={({ hovered }: any) => [styles.stopRun, hovered && styles.stopRunHover]}
+              accessibilityLabel="stop this run"
+            >
+              <Text style={styles.stopRunText}>Stop</Text>
+            </Pressable>
           </View>
         )}
       </ScrollView>
@@ -509,7 +572,11 @@ export default function AiAgent({
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
-          placeholder="Ask me anything about your APIs..."
+          // A name for the box that does not change when its wording does. The
+          // demo harness was selecting it by placeholder text, so rewording the
+          // placeholder broke five runs that had nothing wrong with them.
+          accessibilityLabel="ask the agent"
+          placeholder="Add a POST /api/users endpoint"
           placeholderTextColor={colors.textDim}
           value={input}
           onChangeText={setInput}
@@ -518,6 +585,7 @@ export default function AiAgent({
           autoCapitalize="none"
         />
         <Pressable
+          accessibilityLabel="send"
           style={({ pressed }: any) => [
             styles.sendBtnWrap,
             (!input.trim() || loading) && styles.sendDisabled,
@@ -653,6 +721,22 @@ const styles = StyleSheet.create({
   },
   traceVerb: {
     color: colors.textDim,
+  },
+  stopRun: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...transition("background-color"),
+  },
+  stopRunHover: {
+    backgroundColor: colors.hover,
+  },
+  stopRunText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: "500",
   },
   working: {
     flexDirection: "row",

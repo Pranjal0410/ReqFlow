@@ -64,3 +64,30 @@ export function missingIn(text: string, vars: Record<string, string>): string[] 
   }
   return out;
 }
+
+// The Authorization header this workspace is already using.
+//
+// A generated request does not always carry one, and on a real API the list
+// ReqFlow needs — to find a record for an :id — sits behind a login. Rather
+// than invent a credential, the tabs the developer has open are read: if one of
+// them authenticates, that is the token they are working with, and it is offered
+// only after the server has answered 401.
+//
+// Nothing is guessed and nothing new is stored: this is a value already present
+// in the workspace, resolved the same way sending that tab would resolve it.
+export function workspaceAuth(
+  tabs: { headers?: { key: string; value: string; enabled: boolean }[] }[],
+  vars: Record<string, string>
+): string | null {
+  for (const tab of tabs) {
+    for (const header of tab.headers || []) {
+      // a header the developer switched off is one they decided not to send
+      if (!header.enabled) continue;
+      if (String(header.key).toLowerCase() !== "authorization") continue;
+      const resolved = substitute(String(header.value), vars).trim();
+      // an unresolved {{token}} is a placeholder, not a credential
+      if (resolved && !/\{\{.*\}\}/.test(resolved)) return resolved;
+    }
+  }
+  return null;
+}

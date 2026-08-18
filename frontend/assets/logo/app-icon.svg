@@ -1,0 +1,13 @@
+<!--
+  The application icon: the same single stroke, on the app's own near-black, in a
+  rounded square. Set at 60% of the canvas with clear space around it, because an
+  icon crowded to its border is the one that turns to mush in a dock.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <rect width="1024" height="1024" rx="228" fill="#0a0a0a" />
+  <g transform="translate(205 205) scale(25.6)"
+     fill="none" stroke="#ededf0" stroke-width="2.4"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 12h6.4l3.1 4.4L21 7.4" />
+  </g>
+</svg>

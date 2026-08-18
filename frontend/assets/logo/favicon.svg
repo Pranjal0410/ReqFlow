@@ -1,0 +1,12 @@
+<!--
+  The favicon. Same stroke, same weight, on the app's near-black so it keeps its
+  shape against light and dark browser chrome alike.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect width="64" height="64" rx="14" fill="#0a0a0a" />
+  <g transform="translate(12.8 12.8) scale(1.6)"
+     fill="none" stroke="#ededf0" stroke-width="2.4"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 12h6.4l3.1 4.4L21 7.4" />
+  </g>
+</svg>

@@ -24,6 +24,13 @@ function shortenIds(label: string): string {
   return label.replace(/\b([0-9a-f]{8})[0-9a-f]{8,}([0-9a-f]{4})\b/gi, "$1…$2");
 }
 
+// The method already has its own coloured badge to the left, so a label that
+// starts with it says the same thing twice — "POST  POST /api/users" — on every
+// tab, in the row that has the least width to spare.
+function withoutMethod(label: string): string {
+  return label.replace(/^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+/i, "");
+}
+
 export default function TabBar({
   tabs,
   activeTabId,
@@ -123,9 +130,10 @@ export default function TabBar({
                   style={[styles.tabLabel, active && styles.tabLabelActive]}
                   numberOfLines={1}
                 >
-                  {shortenIds(tab.label || "New Request")}
+                  {withoutMethod(shortenIds(tab.label || "New Request"))}
                 </Text>
                 <TouchableOpacity
+                  accessibilityLabel="close this tab"
                   style={styles.closeBtn}
                   onPress={(e) => {
                     e.stopPropagation();
@@ -139,6 +147,7 @@ export default function TabBar({
           })}
 
           <Pressable
+            accessibilityLabel="new request tab"
             style={({ hovered }: any) => [styles.newTab, hovered && styles.newTabHover]}
             onPress={onNewTab}
           >
@@ -184,7 +193,7 @@ export default function TabBar({
               {runSummary.errors > 0 && <Text> · {runSummary.errors} not sent</Text>}
             </Text>
           ) : (
-            <Text style={styles.closeOthersText}>run all ({runnable})</Text>
+            <Text style={styles.closeOthersText}>Run all ({runnable})</Text>
           )}
         </Pressable>
       )}
@@ -194,7 +203,7 @@ export default function TabBar({
           style={({ hovered }: any) => [styles.closeOthers, hovered && styles.closeOthersHover]}
           onPress={onCloseOthers}
         >
-          <Text style={styles.closeOthersText}>close others</Text>
+          <Text style={styles.closeOthersText}>Close others</Text>
         </Pressable>
       )}
     </View>

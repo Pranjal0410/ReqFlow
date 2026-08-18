@@ -2,8 +2,13 @@ import { Platform } from "react-native";
 
 // Only the native app needs this. A phone cannot reach the dev machine by
 // "localhost", so it has to be told an address, and that address changes with
-// the wifi. Change it only here.
-const DEV_IP = "10.207.161.60";
+// the wifi.
+//
+// It comes from the environment rather than from a line in this file, because a
+// line in this file is one developer's home network committed to everyone else's
+// checkout — which is what was here. Set EXPO_PUBLIC_DEV_IP when running on a
+// device; the browser and the desktop app never read it.
+const DEV_IP = process.env.EXPO_PUBLIC_DEV_IP || "localhost";
 
 // On web the app is already being served by the dev machine, so whatever host
 // loaded this page can serve the api too. Deriving it means a new wifi network

@@ -93,6 +93,7 @@ export default function HeadersEditor({
             />
 
             <Pressable
+              accessibilityLabel="remove this header"
               style={({ hovered }: any) => [styles.removeBtn, hovered && styles.removeBtnHover]}
               onPress={() => removeRow(i)}
             >

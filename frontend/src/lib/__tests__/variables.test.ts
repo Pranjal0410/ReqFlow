@@ -1,4 +1,4 @@
-import { findToken, isSecretVariable, missingIn, substitute, toMap } from "../variables";
+import { findToken, isSecretVariable, missingIn, substitute, toMap, workspaceAuth} from "../variables";
 
 const vars = toMap([
   { key: "token", value: "abc123" },
@@ -105,5 +105,37 @@ describe("a name with no value", () => {
     const vars = toMap([{ key: "token", value: "abc" }]);
     expect(substitute("Bearer {{token}}", vars)).toBe("Bearer abc");
     expect(missingIn("Bearer {{token}}", vars)).toEqual([]);
+  });
+});
+
+// Finding a record for an :id means listing the collection, and on a real API
+// that list is behind a login. The generated request does not always carry one,
+// so the credential the developer is already using in this workspace is offered
+// — after the server has said 401, and never invented.
+describe("workspaceAuth", () => {
+  const vars = { token: "eyJhbGciOi.real.token" };
+
+  it("finds the token the developer is already sending", () => {
+    const tabs = [
+      { headers: [{ key: "content-type", value: "application/json", enabled: true }] },
+      { headers: [{ key: "Authorization", value: "Bearer {{token}}", enabled: true }] },
+    ];
+    expect(workspaceAuth(tabs, vars)).toBe("Bearer eyJhbGciOi.real.token");
+  });
+
+  it("ignores a header the developer switched off", () => {
+    const tabs = [{ headers: [{ key: "Authorization", value: "Bearer {{token}}", enabled: false }] }];
+    expect(workspaceAuth(tabs, vars)).toBeNull();
+  });
+
+  it("will not pass on an unresolved placeholder", () => {
+    // "Bearer {{token}}" with no such variable is not a credential
+    const tabs = [{ headers: [{ key: "Authorization", value: "Bearer {{missing}}", enabled: true }] }];
+    expect(workspaceAuth(tabs, vars)).toBeNull();
+  });
+
+  it("has nothing to offer when no tab authenticates", () => {
+    expect(workspaceAuth([{ headers: [] }], vars)).toBeNull();
+    expect(workspaceAuth([], vars)).toBeNull();
   });
 });

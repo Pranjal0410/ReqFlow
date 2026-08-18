@@ -67,7 +67,23 @@ export default function ResponseViewer({ response, loading, timingNote, onSaveTo
   // the previous response is cleared the moment Send is pressed, so without
   // this the panel would blink out of existence for the length of the request
   if (!response) {
-    if (!loading) return null;
+    if (!loading) {
+      // Half the window was an unexplained black rectangle before a request had
+      // been sent. It is the largest thing on screen; leaving it blank makes the
+      // app look like it has failed to load rather than like it is waiting.
+      return (
+        <View style={styles.section}>
+          <View style={styles.divider} />
+          <View style={styles.blank}>
+            <Icon name="send" size={20} color={colors.textDim} />
+            <Text style={styles.blankTitle}>No response yet</Text>
+            <Text style={styles.blankBody}>
+              Press Send, or ask the agent to write an endpoint and ReqFlow will run it for you.
+            </Text>
+          </View>
+        </View>
+      );
+    }
     return (
       <View style={styles.section}>
         <View style={styles.divider} />
@@ -254,6 +270,24 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 14,
     marginBottom: 8,
+  },
+  blank: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 54,
+    gap: 7,
+  },
+  blankTitle: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  blankBody: {
+    color: colors.textDim,
+    fontSize: 11,
+    lineHeight: 17,
+    textAlign: "center",
+    maxWidth: 320,
   },
   waiting: {
     flexDirection: "row",

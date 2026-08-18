@@ -12,13 +12,25 @@ import RequestBuilder from "./src/components/RequestBuilder";
 import RuntimeTrace from "./src/components/RuntimeTrace";
 import ScanModal from "./src/components/ScanModal";
 import CodeView from "./src/components/CodeView";
+import RunDetail from "./src/components/RunDetail";
+import ApplyPreview from "./src/components/ApplyPreview";
+import InstructionPanel from "./src/components/InstructionPanel";
+import SettingsPanel from "./src/components/SettingsPanel";
+import ExamplesPanel from "./src/components/ExamplesPanel";
 import Toast from "./src/components/Toast";
-import AppStatusBar from "./src/components/StatusBar";
+import AppStatusBar, { ModelStatus } from "./src/components/StatusBar";
 import {
   analyzeProject,
   sendRequest,
   checkTarget,
   exportOpenApi,
+  checkModel,
+  cancelRun,
+  runningProjects,
+  stopProject,
+  planGenerated,
+  applyGenerated,
+  verifyGenerated,
 } from "./src/services/api";
 import {
   DetectedRoute,
@@ -26,15 +38,40 @@ import {
   HistoryEntry,
   GeneratedEndpoint,
   GeneratedRoute,
+  ApplyPlan,
+  VerifyResult,
+  ApplyOutcome,
+  AppliedFile,
+  RunningProject,
+  RunRecord,
+  Instruction,
 } from "./src/types";
 import { colors } from "./src/theme/colors";
 import { CONFIG } from "./src/config";
 import { runAssertions } from "./src/lib/assertions";
-import { loadWorkspace, saveWorkspace, clearWorkspace } from "./src/lib/persist";
-import { Variable, toMap, substitute } from "./src/lib/variables";
+import {
+  loadWorkspace,
+  saveWorkspace,
+  clearWorkspace,
+  defaultInstructions,
+} from "./src/lib/persist";
+import { Variable, toMap, substitute, workspaceAuth } from "./src/lib/variables";
 import { withScheme, originOf } from "./src/lib/url";
-import { addGenerated, pruneGenerated, toGeneratedRoute } from "./src/lib/generatedRoutes";
-import { applyPathParams } from "./src/lib/pathParams";
+import {
+  addGenerated,
+  pruneGenerated,
+  toGeneratedRoute,
+  routeKey,
+} from "./src/lib/generatedRoutes";
+import { applyPathParams, matchTemplate } from "./src/lib/pathParams";
+import {
+  ExampleStore,
+  ExampleLimit,
+  DEFAULT_EXAMPLE_LIMIT,
+  toExample,
+  record as recordExample,
+  forEndpoint,
+} from "./src/lib/examples";
 import {
   TimingHistory,
   record as recordTiming,
@@ -42,6 +79,61 @@ import {
   summarise as summariseTiming,
   endpointKey,
 } from "./src/lib/timings";
+
+// One verdict, not two messages. Every number in it was measured by the
+// backend — the wait for the server, the statuses the server gave — so none of
+// it is an estimate wearing a fact's clothes.
+//
+// The distinction that matters most is between "did not work" and "could not be
+// checked". Code that was written while nothing was listening is not code that
+// failed; saying so would send the developer to read a diff that is fine.
+export function describeApplied(written: string, result: VerifyResult): ApplyOutcome {
+  // Stopped on purpose. Not a failure — nothing was found to be wrong — and not
+  // a success either, because nothing was checked.
+  if (result.cancelled) {
+    return { verdict: "unverified", text: result.message || `${written}. Stopped before checking.` };
+  }
+
+  if (!result.ready) {
+    return {
+      verdict: result.brokeServer ? "failed" : "unverified",
+      text: `${written}. ${result.message}`,
+    };
+  }
+
+  if (result.pickedUp === false) {
+    return { verdict: "unverified", text: `${written}. ${result.message}` };
+  }
+
+  const calls = [result.create, result.read].filter(Boolean);
+  const failed = calls.filter((c) => c!.response.status >= 400);
+  const summary = calls
+    .map((c) => `${c!.method} ${c!.url.replace(/^https?:\/\/[^/]+/, "")} ${c!.response.status}`)
+    .join(", ");
+
+  if (failed.length > 0) {
+    const first = failed[0]!;
+    return {
+      verdict: "failed",
+      text: `${written}, but the endpoint did not work: ${first.method} ${first.url.replace(
+        /^https?:\/\/[^/]+/,
+        ""
+      )} returned ${first.response.status}. (${summary})`,
+    };
+  }
+
+  const waited = `server answered in ${(result.waitedMs / 1000).toFixed(1)}s`;
+
+  // it ran, but nothing read it back, so "it works" is more than was checked
+  if (!result.read) {
+    return {
+      verdict: "unverified",
+      text: `${written}, ${waited} — ${summary}. ${result.message || "Nothing read it back."}`,
+    };
+  }
+
+  return { verdict: "verified", text: `${written}, ${waited} — ${summary}.` };
+}
 
 function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
@@ -74,13 +166,83 @@ export default function App() {
   // per endpoint timing samples, so a response can be read against its own past
   const [timings, setTimings] = useState<TimingHistory>({});
   const [recentScans, setRecentScans] = useState<string[]>([]);
+  // standing rules the agent follows. saved with the workspace, because a rule
+  // the user has to restate after every restart is not a rule they gave once.
+  // Seeded, not empty: a first launch already follows the house rules, and the
+  // panel shows exactly which ones rather than promising to learn them later.
+  const [instructions, setInstructions] = useState<Instruction[]>(defaultInstructions);
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  // the ids the backend reported putting into the last prompt. the panel shows
+  // this rather than assuming every enabled rule arrived.
+  const [instructionsSent, setInstructionsSent] = useState<string[] | null>(null);
+  // every send is kept as an example of its endpoint. nobody presses save: a
+  // button you have to remember only catches the runs you thought would matter.
+  const [examples, setExamples] = useState<ExampleStore>({});
+  const [exampleLimit, setExampleLimit] = useState<ExampleLimit>(DEFAULT_EXAMPLE_LIMIT);
+  const [showExamples, setShowExamples] = useState(false);
+  // which model is behind the scan, the code generator and the agent. asked
+  // once at startup rather than polled: it changes when the backend restarts,
+  // and a check that costs a model call is not one to run on a timer.
+  const [model, setModel] = useState<ModelStatus | null>(null);
+  // the project ReqFlow started itself. polled rather than assumed: the backend
+  // is the only thing that knows, and it can restart underneath the page.
+  const [runningProject, setRunningProject] = useState<RunningProject | null>(null);
+  // the last few applies, so what happened is still readable after the panel is
+  // closed. capped, because this is a short memory of recent work rather than a
+  // log — the fifth one back has never been the one anybody wanted.
+  const [runs, setRuns] = useState<RunRecord[]>([]);
   // the folder behind the current scan, kept because generated code is written
   // in the style of what is in it
   const [projectPath, setProjectPath] = useState("");
   // source for an endpoint the project does not have yet. it is held rather
   // than shown once, so the log row in the chat can bring it back.
-  const [generated, setGenerated] = useState<GeneratedEndpoint | null>(null);
+  // Source the agent wrote, kept per endpoint rather than as one "the last
+  // one". A run that writes three endpoints leaves three rows in the sidebar,
+  // and a single slot would give all three of them the third one's code.
+  // Session-only, like the rows themselves.
+  const [generatedCode, setGeneratedCode] = useState<Record<string, GeneratedEndpoint>>({});
+  const [activeCodeKey, setActiveCodeKey] = useState<string | null>(null);
   const [showCode, setShowCode] = useState(false);
+  // the applied run being read, kept apart from the code view so a run whose
+  // code is no longer on hand still has somewhere to open
+  const [openRun, setOpenRun] = useState<RunRecord | null>(null);
+  const generated = activeCodeKey ? generatedCode[activeCodeKey] ?? null : null;
+  const generatedCodeKeys = React.useMemo(
+    () => new Set(Object.keys(generatedCode)),
+    [generatedCode]
+  );
+
+  // switched off means not sent, so the panel's "switched on" and what reaches
+  // the model are the same list rather than two lists that agree most of the time
+  const activeInstructions = React.useMemo(
+    () => instructions.filter((i) => i.enabled).map((i) => ({ id: i.id, text: i.text })),
+    [instructions]
+  );
+  // the diff between that source and the project it would go into. held apart
+  // from the code itself because it is about the files, not the endpoint, and
+  // it is rebuilt every time the preview opens rather than cached: the folder
+  // is the developer's, and it can have moved on since the code was written.
+  const [applyPlan, setApplyPlan] = useState<ApplyPlan | null>(null);
+  const [showApply, setShowApply] = useState(false);
+  const [applyLoading, setApplyLoading] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  // the verification currently under way, so it can be stopped. null when
+  // nothing is running, which is also what hides the Cancel.
+  const [verifyingRun, setVerifyingRun] = useState<string | null>(null);
+  // what the write and the run that followed it actually did, per endpoint.
+  // keyed like the code is, so applying one endpoint cannot make another one's
+  // panel claim its code is already in the project.
+  const [appliedSummaries, setAppliedSummaries] = useState<Record<string, ApplyOutcome>>({});
+  const appliedOutcome = activeCodeKey ? appliedSummaries[activeCodeKey] ?? null : null;
+  // the evidence behind the verdict: which files were written, and what the
+  // backend measured when it ran the endpoint. kept per endpoint, like the
+  // verdict itself.
+  const [appliedDetail, setAppliedDetail] = useState<
+    Record<string, { files: AppliedFile[]; result: VerifyResult | null }>
+  >({});
+  const appliedEvidence = activeCodeKey ? appliedDetail[activeCodeKey] ?? null : null;
   // endpoints the agent drafted that the scan has not found. deliberately not
   // in the saved workspace: they are suggestions about code that does not
   // exist yet, and one that came back after a restart would look like a real
@@ -106,6 +268,15 @@ export default function App() {
         setTimings(saved.timings || {});
         setRecentScans(saved.recentScans || []);
         setProjectPath(saved.projectPath || "");
+        setInstructions(saved.instructions || []);
+        setExamples(saved.examples || {});
+        setExampleLimit(saved.exampleLimit || DEFAULT_EXAMPLE_LIMIT);
+        // the agent's work, back where it was left. the code view is not
+        // reopened: coming back to a modal nobody asked for is its own problem.
+        setGeneratedCode(saved.generatedCode || {});
+        setGeneratedRoutes(saved.generatedRoutes || []);
+        setAppliedSummaries(saved.appliedSummaries || {});
+        setRuns(saved.runs || []);
       }
       if (!cancelled) setHydrated(true);
     })();
@@ -130,10 +301,60 @@ export default function App() {
         timings,
         recentScans,
         projectPath,
+        instructions,
+        examples,
+        exampleLimit,
+        // the agent's work on this project, so closing the app does not throw
+        // away a diff the developer has already read
+        generatedCode,
+        generatedRoutes,
+        appliedSummaries,
+        runs,
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans, projectPath]);
+  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans, projectPath, instructions, examples, exampleLimit, generatedCode, generatedRoutes, appliedSummaries, runs]);
+
+  // what ReqFlow is running, kept current so the offer to stop it is real
+  const refreshRunning = React.useCallback(async () => {
+    try {
+      const list = await runningProjects();
+      setRunningProject(list[0] ?? null);
+    } catch {
+      // the backend being unreachable is reported by the target badge already
+    }
+  }, []);
+
+  React.useEffect(() => {
+    refreshRunning();
+    const id = setInterval(refreshRunning, 5000);
+    return () => clearInterval(id);
+  }, [refreshRunning]);
+
+  const handleStopProject = async () => {
+    if (!runningProject) return;
+    try {
+      const list = await stopProject(runningProject.projectPath);
+      setRunningProject(list[0] ?? null);
+      // the badge is about a server this app has just stopped, so it is asked
+      // again now rather than left saying "responding" until the next tick
+      setRecheckTarget((n) => n + 1);
+    } catch (err: any) {
+      setError(err?.response?.data?.error || err?.message || "could not stop it");
+    }
+  };
+
+  React.useEffect(() => {
+    let cancelled = false;
+    checkModel()
+      .then((m) => !cancelled && setModel(m))
+      // a backend that is not up yet is not a broken model, and saying so would
+      // be the wrong answer to the wrong question
+      .catch(() => !cancelled && setModel(null));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -217,6 +438,11 @@ export default function App() {
 
   // poll it so the status badge reflects reality instead of just asserting it
   const [targetUp, setTargetUp] = useState<boolean | null>(null);
+  // bumped when something the app itself did makes the badge wrong before the
+  // next tick — stopping the server it was running, most obviously. Fifteen
+  // seconds of "responding" after ReqFlow shut the server down is the app
+  // reporting a world it has itself just changed.
+  const [recheckTarget, setRecheckTarget] = useState(0);
 
   React.useEffect(() => {
     if (!target) {
@@ -241,7 +467,32 @@ export default function App() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [target]);
+  }, [target, recheckTarget]);
+
+  // One way in for all three places a request gets sent: by hand, by Run all,
+  // and by the agent. Credentials are taken out inside toExample(), so no caller
+  // has to remember to do it — the one that forgets is the one that writes a
+  // token to disk.
+  const keepExample = (
+    method: string,
+    url: string,
+    body: string,
+    headers: Record<string, string>,
+    response: any
+  ) => {
+    setExamples((prev) =>
+      recordExample(
+        prev,
+        toExample({ method, url, body }, headers, response, Date.now()),
+        exampleLimit
+      )
+    );
+  };
+
+  const activeExamples = React.useMemo(
+    () => forEndpoint(examples, activeTab.method, activeTab.url),
+    [examples, activeTab.method, activeTab.url]
+  );
 
   const updateActiveTab = (updates: Partial<RequestTab>) => {
     setTabs((prev) =>
@@ -345,6 +596,7 @@ export default function App() {
           parsedBody
         );
         setTimings((prev) => recordTiming(prev, tab.method, tab.url, res));
+        keepExample(tab.method, tab.url, tab.body, headerObj, res);
       const tested = runAssertions(tab.tests, res);
         tested.forEach((t) => (t.passed ? passed++ : failed++));
 
@@ -392,10 +644,23 @@ export default function App() {
     setVariables([]);
     setTimings({});
     setRecentScans([]);
+    setExamples({});
+    // reset returns the app to a first launch, and a first launch has the
+    // house rules on — not to an emptier state than the app ships with
+    setInstructions(defaultInstructions());
+    setInstructionsSent(null);
     setProjectName("ReqFlow");
     setProjectPath("");
-    setGenerated(null);
+    setGeneratedCode({});
+    setActiveCodeKey(null);
     setGeneratedRoutes([]);
+    setApplyPlan(null);
+    setAppliedSummaries({});
+    // now that runs outlive the session, reset has to take them with it — a
+    // reset that leaves the Applied list behind has not reset anything the
+    // developer can see
+    setRuns([]);
+    setApplyError(null);
     setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
   };
@@ -418,20 +683,41 @@ export default function App() {
 
     // keep the default Content-Type unless the agent set its own
     const hasContentType = drafted.some((h) => h.key.toLowerCase() === "content-type");
+    const headers = hasContentType
+      ? drafted
+      : [...newTab.headers.filter((h) => h.key === "Content-Type"), ...drafted];
 
-    setTabs((prev) => [
-      ...prev,
-      {
-        ...newTab,
-        method: draft.method,
-        url: draft.url,
-        body: draft.body,
-        headers: hasContentType
-          ? drafted
-          : [...newTab.headers.filter((h) => h.key === "Content-Type"), ...drafted],
-        label: draft.label,
-      },
-    ]);
+    // Regenerating the same endpoint refreshes its tab rather than stacking a
+    // second one. Three attempts at POST /api/users left three identical tabs
+    // and the developer picking between them — and only the last one matched
+    // the code on screen. The same rule the agent's own sends already follow.
+    const existing = tabsRef.current.find(
+      (t) => t.method === draft.method && t.url === draft.url
+    );
+
+    if (existing) {
+      const next = tabsRef.current.map((t) =>
+        t.id === existing.id
+          ? { ...t, body: draft.body, headers, label: draft.label, response: null, tests: [] }
+          : t
+      );
+      setTabs(next);
+      tabsRef.current = next;
+      setActiveTabId(existing.id);
+      activeTabIdRef.current = existing.id;
+
+      setGeneratedRoutes((prev) =>
+        addGenerated(prev, toGeneratedRoute(draft, existing.id), routes)
+      );
+      return;
+    }
+
+    const next = [
+      ...tabsRef.current,
+      { ...newTab, method: draft.method, url: draft.url, body: draft.body, headers, label: draft.label },
+    ];
+    setTabs(next);
+    tabsRef.current = next;
     setActiveTabId(newTab.id);
     activeTabIdRef.current = newTab.id;
 
@@ -448,7 +734,19 @@ export default function App() {
   // a second tab drafting the same thing. If that tab has been closed since,
   // the row reopens it — a click that does nothing at all is worse than one
   // that brings the request back.
+  // A row the agent wrote code for opens that code, because the code is the
+  // thing that row is about: the tab beside it is one button away inside the
+  // panel. Rows for endpoints the agent only drafted a request against have no
+  // code behind them, and those still go straight to their tab — opening an
+  // empty panel would be a worse answer than the one that was there before.
   const handleSelectGenerated = (route: GeneratedRoute) => {
+    const key = routeKey(route.method, route.path);
+    if (generatedCode[key]) {
+      setActiveCodeKey(key);
+      setShowCode(true);
+      return;
+    }
+
     const existing = tabsRef.current.find((t) => t.id === route.tabId);
     if (existing) {
       setActiveTabId(existing.id);
@@ -487,6 +785,22 @@ export default function App() {
     setTimings((prev) =>
       sent.reduce((acc, s) => recordTiming(acc, s.method, s.url, s.response), prev)
     );
+    setExamples((prev) =>
+      sent.reduce(
+        (acc, s) =>
+          recordExample(
+            acc,
+            toExample(
+              { method: s.method, url: s.url, body: s.body },
+              s.headers || {},
+              s.response,
+              Date.now()
+            ),
+            exampleLimit
+          ),
+        prev
+      )
+    );
     // built here rather than inside a setTabs updater: React is free to defer
     // an updater until render, and the id to select was being read on the next
     // line. it happened to work, but only while nothing else was queued.
@@ -505,10 +819,33 @@ export default function App() {
         headers.unshift({ key: "Content-Type", value: "application/json", enabled: true });
       }
       // testing the same endpoint again should refresh its tab, not stack one
-      const at = next.findIndex((t) => t.method === s.method && t.url === s.url);
+      let at = next.findIndex((t) => t.method === s.method && t.url === s.url);
+
+      // The tab the agent drafted holds /api/incidents/:id/commander while the
+      // request that just ran names a real record. They are the same endpoint,
+      // and the drafted tab is where the developer is looking — so the response
+      // goes there, with the value ReqFlow used filled into Params so the tab
+      // can be sent again by hand.
+      let filledParams: Record<string, string> = {};
+      if (at < 0) {
+        at = next.findIndex((t) => {
+          if (t.method !== s.method) return false;
+          const values = matchTemplate(t.url, s.url);
+          if (!values) return false;
+          filledParams = values;
+          return true;
+        });
+      }
 
       if (at >= 0) {
-        next[at] = { ...next[at], headers, body: s.body, response: s.response, loading: false };
+        next[at] = {
+          ...next[at],
+          headers,
+          body: s.body,
+          response: s.response,
+          loading: false,
+          pathParams: { ...(next[at].pathParams || {}), ...filledParams },
+        };
         focusId = next[at].id;
       } else {
         const tab = createTab(baseUrl);
@@ -542,6 +879,28 @@ export default function App() {
     activeTabIdRef.current = tab.id;
   };
 
+  // The agent noticed a standing preference. It arrives as text rather than as
+  // a whole record so the app decides the id, and the duplicate check runs here
+  // too: the backend's copy of the list is whatever was last sent, and a rule
+  // added twice in one turn would otherwise slip past it.
+  const handleRememberInstruction = (text: string) => {
+    setInstructions((prev) => {
+      const clean = text.trim().replace(/\s+/g, " ");
+      if (!clean) return prev;
+      if (prev.some((i) => i.text.toLowerCase() === clean.toLowerCase())) return prev;
+      return [
+        ...prev,
+        {
+          id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
+          text: clean,
+          enabled: true,
+          at: Date.now(),
+          source: "agent",
+        },
+      ];
+    });
+  };
+
   const handleAgentSetVariable = (name: string, value: string) => {
     setVariables((prev) => {
       const at = prev.findIndex((v) => v.key === name);
@@ -557,8 +916,18 @@ export default function App() {
   // an endpoint the project does not have yet. the code is shown, and a tab is
   // drafted against it by the same reply, so the two arrive together.
   const handleGeneratedCode = (next: GeneratedEndpoint) => {
-    setGenerated(next);
+    const key = routeKey(next.method, next.path);
+    // regenerating the same endpoint replaces its code, and its "applied" note
+    // with it: the summary described the code that has just been thrown away
+    setGeneratedCode((prev) => ({ ...prev, [key]: next }));
+    setAppliedSummaries((prev) => {
+      const { [key]: _gone, ...rest } = prev;
+      return rest;
+    });
+    setActiveCodeKey(key);
     setShowCode(true);
+    setApplyPlan(null);
+    setApplyError(null);
   };
 
   // from the code view to the request it drafted. the tab is already there,
@@ -569,6 +938,203 @@ export default function App() {
     const url = `${baseUrl.replace(/\/+$/, "")}${generated.path}`;
     const tab = tabs.find((t) => t.method === generated.method && t.url === url);
     if (tab) setActiveTabId(tab.id);
+  };
+
+  // The diff, built fresh from the folder as it is now. Opening the panel is
+  // what fetches it, so a preview can never be a stale description of a write
+  // that would do something else.
+  const handlePreviewApply = async () => {
+    if (!generated) return;
+    if (!stylePath) {
+      setError("No project folder is known, so there is nowhere to write. Scan a project first.");
+      return;
+    }
+
+    setShowApply(true);
+    setApplyPlan(null);
+    setApplyError(null);
+    setApplyLoading(true);
+
+    try {
+      setApplyPlan(await planGenerated(stylePath, generated.layers));
+    } catch (err: any) {
+      setApplyError(
+        err?.response?.data?.error || err?.message || "the project folder could not be read"
+      );
+    } finally {
+      setApplyLoading(false);
+    }
+  };
+
+  // Write the code, then prove it: run the endpoint and read the result back,
+  // so nobody does those two by hand to find out whether the generation worked.
+  // Both land in tabs with their real responses, the same way an agent run does.
+  const handleApply = async () => {
+    if (!generated || !stylePath) return;
+
+    // captured now: the panel can be pointed at another endpoint while the
+    // write and the run are still going, and the summary belongs to this one
+    const key = routeKey(generated.method, generated.path);
+    const noteApplied = (outcome: ApplyOutcome) =>
+      setAppliedSummaries((prev) => ({ ...prev, [key]: outcome }));
+
+    setApplying(true);
+
+    // the write and the run that follows it fail differently, and they are kept
+    // apart because of what a shared catch would have to say: a verification
+    // that threw would report "nothing was written" over files that had just
+    // been changed, which is the worst thing this screen could tell anyone
+    let written: string;
+    let writtenFiles: AppliedFile[] = [];
+    try {
+      const applied = await applyGenerated(stylePath, generated.layers);
+      writtenFiles = applied;
+      setAppliedDetail((prev) => ({ ...prev, [key]: { files: applied, result: null } }));
+      written = `${applied.length} file${applied.length === 1 ? "" : "s"} written`;
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.error || err?.message || "the code could not be written";
+      setApplyError(detail);
+      setApplying(false);
+      return;
+    }
+
+    setShowApply(false);
+
+    // Named rather than generic. Whether the next twenty seconds are a server
+    // starting from cold, ReqFlow restarting its own, or a wait on one the
+    // developer is running is the difference between patience and confusion —
+    // and the app already knows which it is about to be.
+    const owns = !!runningProject && runningProject.projectPath === stylePath;
+    const about = owns
+      ? "Restarting your server…"
+      : targetUp
+      ? "Waiting for your server to pick it up…"
+      : "Starting your server…";
+    noteApplied({ verdict: "unverified", text: `${written}. ${about}` });
+
+    // the wait is the long part and the part worth being able to stop. the files
+    // are already written by now and stay written, whatever happens next.
+    const runId = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+    setVerifyingRun(runId);
+
+    try {
+      // the wire gets the resolved values, the tab keeps the {{name}} it was
+      // written with, exactly as a hand-sent request does
+      const vars = toMap(variables);
+      const writtenHeaders = generated.request.headers || {};
+      const resolved: Record<string, string> = {};
+      Object.entries(writtenHeaders).forEach(([k, v]) => {
+        resolved[k] = substitute(String(v), vars);
+      });
+
+      const result = await verifyGenerated({
+        baseUrl,
+        method: generated.method,
+        path: generated.path,
+        headers: resolved,
+        body: generated.request.body ?? null,
+        verify: generated.verify,
+        // whether the server was answering a moment ago, which is what turns
+        // "nothing answered" into "what you just applied stopped it"
+        serverWasUp: targetUp === true,
+        runId,
+        // ReqFlow reloads the project itself when it is the one running it, and
+        // starts it when nothing is. A server the developer started in their own
+        // terminal is left alone.
+        projectPath: stylePath,
+        fallbackAuth: workspaceAuth(tabsRef.current, vars),
+      });
+
+      const bodyText =
+        generated.request.body === null ? "" : JSON.stringify(generated.request.body, null, 2);
+
+      const sent: AgentSentRequest[] = [];
+      if (result.create) {
+        sent.push({ ...result.create, headers: writtenHeaders, body: bodyText });
+      }
+      if (result.read) {
+        sent.push({ ...result.read, headers: writtenHeaders, body: "" });
+      }
+      if (sent.length > 0) handleAgentRequests(sent);
+
+      // The tab the agent drafted still holds the literal :id, so pressing Send
+      // on it does nothing useful — while ReqFlow has just run this endpoint
+      // against a real record and knows which one. Filling it in turns a tab
+      // that cannot be sent into one that can, using a value the developer can
+      // see and change rather than one hidden inside the run.
+      if (result.usedRecordId) {
+        const param = (generated.path.match(/:([A-Za-z_][\w]*)/) || [])[1];
+        const draftUrl = `${baseUrl.replace(/\/+$/, "")}${generated.path}`;
+        if (param) {
+          const next = tabsRef.current.map((t) =>
+            t.method === generated.method && t.url === draftUrl
+              ? { ...t, pathParams: { ...(t.pathParams || {}), [param]: result.usedRecordId! } }
+              : t
+          );
+          setTabs(next);
+          tabsRef.current = next;
+        }
+      }
+
+      const outcome = describeApplied(written, result);
+      noteApplied(outcome);
+      setAppliedDetail((prev) => ({ ...prev, [key]: { files: writtenFiles, result } }));
+
+      // kept as one row of recent work, with the breakdown the backend measured
+      setRuns((prev) =>
+        [
+          {
+            id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
+            at: Date.now(),
+            method: generated.method,
+            path: generated.path,
+            verdict: outcome.verdict,
+            text: outcome.text,
+            phases: result.phases || [],
+          },
+          ...prev,
+        ].slice(0, 4)
+      );
+
+      // ReqFlow may have started or restarted the project to run this, and the
+      // status bar should say so without waiting for the next tick
+      refreshRunning();
+      setRecheckTarget((n) => n + 1);
+
+      // The panel stays open, on success as much as on failure. It used to close
+      // itself when a change verified, on the reasoning that good news needs no
+      // dwelling on — which made the one thing this product claims the one thing
+      // that flashed past. What was checked is the argument; it stays on screen
+      // until the developer closes it.
+
+      // the Generated group is for endpoints the server does not serve yet, and
+      // this one now answers. a server that never restarted still does not, so
+      // the row stays until it does.
+      if (result.pickedUp) {
+        setGeneratedRoutes((prev) =>
+          prev.filter((g) => !(g.method === generated.method && g.path === generated.path))
+        );
+      }
+    } catch (err: any) {
+      // the files did change, and the check did not run. that is "we cannot
+      // tell", not "it failed" — and not "it worked" either.
+      const detail = err?.response?.data?.error || err?.message || "unknown error";
+      noteApplied({
+        verdict: "unverified",
+        text: `${written}, but it could not be checked: ${detail}`,
+      });
+    } finally {
+      setApplying(false);
+      setVerifyingRun(null);
+    }
+  };
+
+  // Stops the checking, not the change: the files are already written and are
+  // left exactly as they are. Saying otherwise would be wrong twice over.
+  const handleCancelVerify = async () => {
+    if (!verifyingRun) return;
+    await cancelRun("generate", verifyingRun);
   };
 
   const handleAgentCreateAssertions = (assertions: AgentAssertion[]) => {
@@ -625,6 +1191,10 @@ export default function App() {
       // recorded before the tab updates, so the comparison shown alongside the
       // new response is against the runs that came before it
       setTimings((prev) => recordTiming(prev, activeTab.method, activeTab.url, res));
+      // the tab's own text, not the resolved values: an example holding a raw
+      // token would be the thing redaction exists to prevent, and {{token}} is
+      // what makes the request reusable later anyway
+      keepExample(activeTab.method, activeTab.url, activeTab.body, headerObj, res);
 
       // assertions run on their own after every send. having to remember a
       // second button was the only way to ever see a result before.
@@ -666,6 +1236,9 @@ export default function App() {
         routeCount={routes.length}
         target={target}
         targetUp={targetUp}
+        instructionCount={activeInstructions.length}
+        onOpenInstructions={() => setShowInstructions(true)}
+        onOpenSettings={() => setShowSettings(true)}
       />
 
       <View style={styles.main}>
@@ -688,6 +1261,21 @@ export default function App() {
           generatedRoutes={generatedRoutes}
           onSelectGenerated={handleSelectGenerated}
           onClearGenerated={handleClearGenerated}
+          generatedWithCode={generatedCodeKeys}
+          runs={runs}
+          onSelectRun={(run) => {
+            // Opens the code straight away when it is still on hand, because
+            // that panel carries the evidence as well as the verdict. Otherwise
+            // the run's own record, which was raised as an error toast before —
+            // one line, in the colour used for failures, for runs that worked.
+            const key = routeKey(run.method, run.path);
+            if (generatedCode[key]) {
+              setActiveCodeKey(key);
+              setShowCode(true);
+              return;
+            }
+            setOpenRun(run);
+          }}
         />
 
         <View style={styles.center}>
@@ -728,6 +1316,8 @@ export default function App() {
               setError(null);
               setShowScan(true);
             }}
+            exampleCount={activeExamples.length}
+            onOpenExamples={() => setShowExamples(true)}
           />
 
           <RuntimeTrace
@@ -759,25 +1349,145 @@ export default function App() {
           projectPath={stylePath}
           onGeneratedCode={handleGeneratedCode}
           onShowCode={() => generated && setShowCode(true)}
+          instructions={activeInstructions}
+          onRememberInstruction={handleRememberInstruction}
+          onInstructionsSent={setInstructionsSent}
         />
       </View>
 
       {/* the scan modal renders above the toast layer, so scan errors
           are shown inside it instead */}
       <AppStatusBar
-        workspace={`${projectName} workspace`}
-        target={target}
-        targetUp={targetUp}
+        workspace={projectName === "ReqFlow" ? "No project open" : `${projectName} workspace`}
         requestCount={history.length}
+        model={model}
+        runningProject={runningProject}
+        onStopProject={handleStopProject}
       />
 
       <Toast message={showScan ? null : error} onDismiss={() => setError(null)} />
 
+      <RunDetail
+        run={openRun}
+        onClose={() => setOpenRun(null)}
+        onOpenCode={
+          openRun && generatedCode[routeKey(openRun.method, openRun.path)]
+            ? () => {
+                setActiveCodeKey(routeKey(openRun.method, openRun.path));
+                setShowCode(true);
+                setOpenRun(null);
+              }
+            : null
+        }
+        onOpenRequest={() => {
+          if (!openRun) return;
+          const tab = createTab(baseUrl);
+          tab.method = openRun.method;
+          tab.url = `${baseUrl.replace(/\/+$/, "")}${openRun.path}`;
+          tab.label = openRun.path;
+          const next = [...tabsRef.current, tab];
+          setTabs(next);
+          tabsRef.current = next;
+          setActiveTabId(tab.id);
+          setOpenRun(null);
+        }}
+      />
+
+      {/* The preview is a step inside this flow rather than a separate window,
+          so the code view steps back while the diff is being read. Both on
+          screen at once put the code view on top of the Apply button, which
+          made it unclickable — the panel looked open and did nothing. */}
       <CodeView
-        visible={showCode}
+        // everything the agent has written code for this session, so a turn that
+        // produced two endpoints does not hide one of them
+        pending={Object.entries(generatedCode).map(([key, g]) => ({
+          key,
+          method: g.method,
+          path: g.path,
+          applied: !!appliedSummaries[key],
+        }))}
+        activeKey={activeCodeKey}
+        onSelectPending={(key) => {
+          setActiveCodeKey(key);
+          setApplyPlan(null);
+          setApplyError(null);
+        }}
+        visible={showCode && !showApply}
         generated={generated}
         onClose={() => setShowCode(false)}
         onOpenRequest={handleOpenGeneratedRequest}
+        onPreviewApply={handlePreviewApply}
+        applied={appliedOutcome}
+        evidence={appliedEvidence}
+        onOpenExchange={handleFocusRequest}
+        verifying={!!verifyingRun}
+        onCancelVerify={handleCancelVerify}
+      />
+
+      {/* the request goes back into the tab; the response deliberately does
+          not. a stored response in the viewer is indistinguishable from one
+          that just came back, which is why they were not saved at all before */}
+      <ExamplesPanel
+        visible={showExamples}
+        examples={activeExamples}
+        limit={exampleLimit}
+        onClose={() => setShowExamples(false)}
+        onLimitChange={setExampleLimit}
+        onRestore={(example) => {
+          updateActiveTab({
+            method: example.method,
+            url: example.url,
+            body: example.body,
+            headers: Object.entries(example.headers).map(([key, value]) => ({
+              key,
+              value,
+              enabled: true,
+            })),
+          });
+          setShowExamples(false);
+        }}
+      />
+
+      <SettingsPanel
+        visible={showSettings}
+        onClose={() => setShowSettings(false)}
+        model={model}
+        onRecheckModel={() => {
+          setModel(null);
+          checkModel()
+            .then(setModel)
+            .catch(() => setModel(null));
+        }}
+        instructions={instructions}
+        onOpenInstructions={() => {
+          setShowSettings(false);
+          setShowInstructions(true);
+        }}
+        exampleLimit={exampleLimit}
+        onExampleLimitChange={setExampleLimit}
+        exampleCount={activeExamples.length}
+        onClearExamples={() => setExamples({})}
+        projectPath={stylePath || ""}
+        runningProject={runningProject}
+        onStopProject={handleStopProject}
+      />
+
+      <InstructionPanel
+        visible={showInstructions}
+        instructions={instructions}
+        onClose={() => setShowInstructions(false)}
+        onChange={setInstructions}
+        lastSent={instructionsSent}
+      />
+
+      <ApplyPreview
+        visible={showApply}
+        plan={applyPlan}
+        loading={applyLoading}
+        error={applyError}
+        applying={applying}
+        onCancel={() => setShowApply(false)}
+        onApply={handleApply}
       />
 
       <ScanModal
@@ -796,7 +1506,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.bg,
-    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 44,
+    // Room for the phone's own status bar, and only there. The 44 was an iOS
+    // notch inset that web and the desktop window inherited too, so every
+    // launch opened with an empty black band above the header — the first thing
+    // anyone saw, and the one part of the screen that showed nothing.
+    paddingTop:
+      Platform.OS === "android"
+        ? StatusBar.currentHeight
+        : Platform.OS === "ios"
+        ? 44
+        : 0,
   },
   main: {
     flex: 1,

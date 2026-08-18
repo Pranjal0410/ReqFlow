@@ -1,4 +1,4 @@
-import { applyPathParams, namesIn, unfilled } from "../pathParams";
+import { applyPathParams, namesIn, unfilled, matchTemplate} from "../pathParams";
 
 // a scanned route arrives as /api/incidents/:id, and that url is useless until
 // something fills it in
@@ -49,5 +49,47 @@ describe("unfilled", () => {
     const url = "http://x/:a/:b";
     expect(unfilled(url, { a: "1" })).toEqual(["b"]);
     expect(unfilled(url, { a: "1", b: "2" })).toEqual([]);
+  });
+});
+
+// The agent drafts a tab holding /api/incidents/:id/commander, and ReqFlow then
+// runs that endpoint against a real record. Compared as strings those are two
+// different urls, so the response landed in a new tab — or nowhere — while the
+// drafted tab sat saying "No response yet" about a request just made for it.
+describe("matchTemplate", () => {
+  it("recognises the concrete url as that template, filled in", () => {
+    expect(
+      matchTemplate(
+        "http://localhost:3001/api/incidents/:id/commander",
+        "http://localhost:3001/api/incidents/6a7ed6be257d1d048d253b9d/commander"
+      )
+    ).toEqual({ id: "6a7ed6be257d1d048d253b9d" });
+  });
+
+  it("reads more than one parameter", () => {
+    expect(
+      matchTemplate("http://h/api/users/:userId/incidents/:id", "http://h/api/users/7/incidents/9")
+    ).toEqual({ userId: "7", id: "9" });
+  });
+
+  it("refuses a url that is a different endpoint", () => {
+    expect(matchTemplate("http://h/api/incidents/:id/commander", "http://h/api/incidents/7/notes"))
+      .toBeNull();
+    expect(matchTemplate("http://h/api/incidents/:id", "http://h/api/users/7")).toBeNull();
+  });
+
+  it("refuses a url of a different length", () => {
+    expect(matchTemplate("http://h/api/incidents/:id", "http://h/api/incidents/7/notes")).toBeNull();
+  });
+
+  it("does not treat two identical urls as a template being filled in", () => {
+    // otherwise every tab would claim every response
+    expect(matchTemplate("http://h/api/incidents", "http://h/api/incidents")).toBeNull();
+  });
+
+  it("decodes a value that had to be escaped", () => {
+    expect(matchTemplate("http://h/api/users/:email", "http://h/api/users/a%40b.com")).toEqual({
+      email: "a@b.com",
+    });
   });
 });

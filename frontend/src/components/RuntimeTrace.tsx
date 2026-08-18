@@ -218,15 +218,15 @@ export default function RuntimeTrace({ response, method, url, comparisons }: Pro
             <Text style={styles.detailLabel}>Status</Text>
             <View style={styles.barTrack} />
             <Text style={styles.detailTime}>{response.status}</Text>
-            <Text style={styles.detailShare}>
-              {response.sizeSource === "content-length" ? "hdr" : "read"}
-            </Text>
           </View>
 
           <Text style={styles.detailNote}>
             Measured on the ReqFlow backend. TTFB is the wait for the first byte,
             download is the time spent reading the body. Time spent between your
-            browser and ReqFlow itself is not included.
+            browser and ReqFlow itself is not included. The body size is{" "}
+            {response.sizeSource === "content-length"
+              ? "the Content-Length the server reported"
+              : "counted from the bytes that arrived"}.
           </Text>
 
           <Text style={styles.detailNote}>

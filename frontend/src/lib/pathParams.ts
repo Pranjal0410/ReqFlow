@@ -28,3 +28,33 @@ export function applyPathParams(url: string, values: Record<string, string>): st
 export function unfilled(url: string, values: Record<string, string>): string[] {
   return namesIn(url).filter((n) => !values[n]);
 }
+
+// Does this concrete url fill in that template, and with what?
+//
+// The agent drafts a tab holding /api/incidents/:id/commander, and ReqFlow then
+// runs /api/incidents/6a7e.../commander against a real record. Compared as
+// strings those are different urls, so the response landed in a new tab — or
+// nowhere — and the drafted tab sat there saying "No response yet" about a
+// request that had just been made on its behalf.
+export function matchTemplate(
+  template: string,
+  concrete: string
+): Record<string, string> | null {
+  const a = template.split("/");
+  const b = concrete.split("/");
+  if (a.length !== b.length) return null;
+
+  const values: Record<string, string> = {};
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].startsWith(":")) {
+      if (!b[i]) return null;
+      values[a[i].slice(1)] = decodeURIComponent(b[i]);
+      continue;
+    }
+    if (a[i] !== b[i]) return null;
+  }
+
+  // an identical pair is not a template being filled in, and treating it as one
+  // would have every tab claim every response
+  return Object.keys(values).length > 0 ? values : null;
+}

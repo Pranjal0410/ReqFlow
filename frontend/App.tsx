@@ -227,7 +227,40 @@ export default function App() {
   const [applyPlan, setApplyPlan] = useState<ApplyPlan | null>(null);
   const [showApply, setShowApply] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
+  // One piece of state, not two. Whether the write failed and whether that
+  // failure has a way out are the same fact, and keeping them apart meant five
+  // places cleared the message while two cleared the flag — leaving a "Choose
+  // the folder" button attached to an error it could not fix.
+  const [applyError, setApplyError] = useState<{
+    message: string;
+    recoverable: boolean;
+  } | null>(null);
+
+  // Choosing the folder is what grants access to it on macOS — the same act
+  // that Scan Project performs, offered where the refusal happened so the
+  // developer does not have to go back and start again.
+  const regrantAndRetry = async () => {
+    const desktop = (globalThis as any).reqflowDesktop;
+    if (typeof desktop?.chooseProjectFolder !== "function") return;
+
+    const chosen = await desktop.chooseProjectFolder().catch(() => null);
+    if (!chosen) return;
+
+    // Choosing a different folder grants that one, not this project. Saying so
+    // is better than retrying and failing again for a reason that now looks
+    // like the first one.
+    const grantsThisProject = stylePath === chosen || (stylePath || "").startsWith(`${chosen}/`);
+    if (!grantsThisProject) {
+      setApplyError({
+        message: `That grants access to ${chosen}, which does not contain this project. Choose ${stylePath} itself, or a folder above it.`,
+        recoverable: true,
+      });
+      return;
+    }
+
+    setApplyError(null);
+    handleApply();
+  };
   const [applying, setApplying] = useState(false);
   // the verification currently under way, so it can be stopped. null when
   // nothing is running, which is also what hides the Cancel.
@@ -345,13 +378,28 @@ export default function App() {
     }
   };
 
+  // The window now opens before the backend does, so the first few checks can
+  // find nothing there. A backend still starting is not a broken model, and
+  // reporting one would be the wrong answer to the wrong question — so this
+  // keeps asking for a while before it accepts silence as an answer.
   React.useEffect(() => {
     let cancelled = false;
-    checkModel()
-      .then((m) => !cancelled && setModel(m))
-      // a backend that is not up yet is not a broken model, and saying so would
-      // be the wrong answer to the wrong question
-      .catch(() => !cancelled && setModel(null));
+    let attempt = 0;
+
+    const ask = () => {
+      checkModel()
+        .then((m) => !cancelled && setModel(m))
+        .catch(() => {
+          if (cancelled) return;
+          attempt++;
+          // roughly half a minute, which covers a cold start on a machine that
+          // is also unpacking the app for the first time
+          if (attempt < 20) setTimeout(ask, 1500);
+          else setModel(null);
+        });
+    };
+
+    ask();
     return () => {
       cancelled = true;
     };
@@ -538,30 +586,43 @@ export default function App() {
     code: string;
   } | null>(null);
 
-  const handleSelectRoute = async (route: DetectedRoute) => {
-    if (stylePath) {
-      try {
-        const found = await fetchRouteSource(stylePath, route.method, route.path);
-        if (found.found && found.code) {
-          setRouteSource({
-            method: route.method,
-            path: route.path,
-            file: found.file || "",
-            line: found.line || 0,
-            code: found.code,
-          });
-          setShowCode(true);
-          return;
-        }
-      } catch {
-        // a lookup that fails must not swallow the click: opening the tab is
-        // what this row did before, and it is still a reasonable answer
+  const handleSelectRoute = (route: DetectedRoute) => openRouteTab(route);
+
+  // The code behind an endpoint the project already has, opened from the row's
+  // own control. If the handler cannot be found the tab opens instead, so the
+  // click is never spent on nothing.
+  const handleShowSource = async (route: DetectedRoute) => {
+    if (!stylePath) return openRouteTab(route);
+    try {
+      const found = await fetchRouteSource(stylePath, route.method, route.path);
+      if (found.found && found.code) {
+        setRouteSource({
+          method: route.method,
+          path: route.path,
+          file: found.file || "",
+          line: found.line || 0,
+          code: found.code,
+        });
+        setShowCode(true);
+        return;
       }
+      setError(found.detail || `No handler for ${route.method} ${route.path} was found.`);
+    } catch (err: any) {
+      setError(String(err?.message || err));
     }
-    openRouteTab(route);
   };
 
   const openRouteTab = (route: DetectedRoute) => {
+    const url = `${baseUrl.replace(/\/+$/, "")}${route.path}`;
+    const open = tabsRef.current.find((t) => t.method === route.method && t.url === url);
+    if (open) {
+      setActiveTabId(open.id);
+      activeTabIdRef.current = open.id;
+      return;
+    }
+
+    // a fresh one gets the route's own body and params, which the plain helper
+    // has nothing to fill them from
     const newTab = createTab(baseUrl, route);
 
     // once a token is in the workspace, every route opened from the sidebar
@@ -574,8 +635,11 @@ export default function App() {
       ];
     }
 
-    setTabs((prev) => [...prev, newTab]);
+    const next = [...tabsRef.current, newTab];
+    setTabs(next);
+    tabsRef.current = next;
     setActiveTabId(newTab.id);
+    activeTabIdRef.current = newTab.id;
   };
 
   const handleCloseTab = (id: string) => {
@@ -663,14 +727,35 @@ export default function App() {
     setTabs((prev) => prev.filter((t) => t.id === activeTabId));
   };
 
-  const handleReplayHistory = (entry: HistoryEntry) => {
+  // One tab per endpoint, wherever the endpoint is opened from.
+  //
+  // Every place that opened one used to add another: the sidebar, the recent
+  // list, an applied run. Ten endpoints and a few visits back to them left a
+  // row of tabs nobody could read, and the one holding the response you wanted
+  // was somewhere in the middle. An endpoint you have already opened is
+  // somewhere to return to.
+  const focusOrOpenTab = (method: string, url: string, label?: string) => {
+    const open = tabsRef.current.find((t) => t.method === method && t.url === url);
+    if (open) {
+      setActiveTabId(open.id);
+      activeTabIdRef.current = open.id;
+      return;
+    }
+
     const tab = createTab(baseUrl);
-    tab.method = entry.method;
-    tab.url = entry.url;
-    tab.label = `${entry.method} ${entry.url.replace(/^https?:\/\/[^/]+/, "")}`;
-    setTabs((prev) => [...prev, tab]);
+    tab.method = method;
+    tab.url = url;
+    tab.label = label || `${method} ${url.replace(/^https?:\/\/[^/]+/, "")}`;
+
+    const next = [...tabsRef.current, tab];
+    setTabs(next);
+    tabsRef.current = next;
     setActiveTabId(tab.id);
+    activeTabIdRef.current = tab.id;
   };
+
+  const handleReplayHistory = (entry: HistoryEntry) =>
+    focusOrOpenTab(entry.method, entry.url);
 
   const handleReset = async () => {
     await clearWorkspace();
@@ -1032,7 +1117,14 @@ export default function App() {
     } catch (err: any) {
       const detail =
         err?.response?.data?.error || err?.message || "the code could not be written";
-      setApplyError(detail);
+      // a refusal the developer can undo by choosing the folder, rather than by
+      // going to look for a system setting
+      setApplyError({
+        message: detail,
+        // a refusal the developer can undo by choosing the folder, rather than
+        // by going to look for a system setting
+        recoverable: err?.response?.data?.code === "ACCESS_DENIED",
+      });
       setApplying(false);
       return;
     }
@@ -1283,6 +1375,7 @@ export default function App() {
         <Sidebar
           routes={routes}
           onSelectRoute={handleSelectRoute}
+          onShowSource={handleShowSource}
           onScanPress={() => {
             setError(null);
             setShowScan(true);
@@ -1552,7 +1645,13 @@ export default function App() {
         visible={showApply}
         plan={applyPlan}
         loading={applyLoading}
-        error={applyError}
+        error={applyError?.message ?? null}
+        onChooseFolder={
+          applyError?.recoverable &&
+          typeof (globalThis as any).reqflowDesktop?.chooseProjectFolder === "function"
+            ? regrantAndRetry
+            : null
+        }
         applying={applying}
         onCancel={() => setShowApply(false)}
         onApply={handleApply}

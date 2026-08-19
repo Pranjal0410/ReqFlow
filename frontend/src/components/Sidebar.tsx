@@ -13,14 +13,19 @@ import Icon from "./Icon";
 import { DetectedRoute, HistoryEntry, GeneratedRoute, RunRecord } from "../types";
 import { Variable, isSecretVariable } from "../lib/variables";
 import { routeKey } from "../lib/generatedRoutes";
+import { recentEndpoints } from "../lib/recent";
 import * as Clipboard from "expo-clipboard";
 
-// how many past requests the sidebar keeps in view
+// how many endpoints the sidebar keeps in view under Recent
 const RECENT_SHOWN = 3;
+
 
 interface Props {
   routes: DetectedRoute[];
   onSelectRoute: (route: DetectedRoute) => void;
+  // the source behind an endpoint the project already has, opened from the row
+  // rather than by clicking it: the row's job is to take you to the endpoint
+  onShowSource: (route: DetectedRoute) => void;
   onScanPress: () => void;
   scanning: boolean;
   baseUrl: string;
@@ -48,6 +53,7 @@ interface Props {
 export default function Sidebar({
   routes,
   onSelectRoute,
+  onShowSource,
   onScanPress,
   scanning,
   baseUrl,
@@ -265,6 +271,23 @@ export default function Sidebar({
                     >
                       {route.path}
                     </Text>
+
+                    {/* The code behind this endpoint, on its own control.
+                        Clicking the row goes to the endpoint — that is what a
+                        row in this list is for, and opening a panel instead put
+                        a step between the developer and sending a request. */}
+                    {hovered === key && (
+                      <Pressable
+                        onPress={(e: any) => {
+                          e?.stopPropagation?.();
+                          onShowSource(route);
+                        }}
+                        accessibilityLabel={`show the code for ${route.method} ${route.path}`}
+                        style={({ hovered: h }: any) => [styles.codeBtn, h && styles.codeBtnHover]}
+                      >
+                        <Icon name="terminal" size={11} color={colors.textDim} />
+                      </Pressable>
+                    )}
                   </Pressable>
 
                   {/* hover only, so this never appears on a phone */}
@@ -427,9 +450,11 @@ export default function Sidebar({
               {/* The three most recent, not the whole session. A list that grows
                   all day pushes the project's own endpoints off the screen, and
                   the fourth-oldest request is not what anyone comes back to. */}
-              <Text style={styles.groupCount}>{Math.min(history.length, RECENT_SHOWN)}</Text>
+              <Text style={styles.groupCount}>
+                {recentEndpoints(history, RECENT_SHOWN).length}
+              </Text>
             </View>
-            {history.slice(0, RECENT_SHOWN).map((h) => (
+            {recentEndpoints(history, RECENT_SHOWN).map((h) => (
               <Pressable
                 key={h.id}
                 style={({ hovered: hv }: any) => [
@@ -477,6 +502,15 @@ export default function Sidebar({
 }
 
 const styles = StyleSheet.create({
+  codeBtn: {
+    width: 20,
+    height: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  codeBtnHover: { backgroundColor: colors.hover },
   container: {
     width: 260,
     backgroundColor: colors.surface,

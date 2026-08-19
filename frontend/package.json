@@ -31,5 +31,8 @@
     "test": "jest"
   },
   "private": true,
-  "description": "ReqFlow's interface: the request builder, the agent, and the review and verification surfaces."
+  "description": "ReqFlow's interface: the request builder, the agent, and the review and verification surfaces.",
+  "engines": {
+    "node": ">=20"
+  }
 }

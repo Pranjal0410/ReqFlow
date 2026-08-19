@@ -10,7 +10,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { colors } from "../theme/colors";
-import { radius, shadow } from "../theme/tokens";
+import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
 import { probeProject, DetectedPort } from "../services/api";
 
@@ -25,6 +25,43 @@ interface Props {
 
 export default function ScanModal({ visible, onClose, onScan, scanning, error, recent }: Props) {
   const [projectPath, setProjectPath] = React.useState("");
+
+  // The desktop wrapper exposes exactly one method to this window: open a folder
+  // dialog. In a browser there is no file system to open, so the field stays a
+  // field and nothing pretends otherwise.
+  const desktop = (globalThis as any).reqflowDesktop;
+  const canBrowse = typeof desktop?.chooseProjectFolder === "function";
+
+  const browse = async () => {
+    try {
+      const chosen = await desktop.chooseProjectFolder();
+      if (chosen) setProjectPath(chosen);
+    } catch {
+      // a cancelled or failed dialog leaves the field exactly as it was, which
+      // is what someone who changed their mind expects
+    }
+  };
+
+  // In the desktop app, Scan Project opens the file browser — because that is
+  // what pressing it means. Typing an absolute path is what you do when the app
+  // has no way to open a window onto the disk; this one does, and on macOS
+  // choosing a folder in that window is also what grants permission to write
+  // into it.
+  //
+  // The dialog opens over the panel rather than replacing it: cancelling leaves
+  // the field, the recent list and the base URL exactly where they were, so
+  // changing your mind costs nothing.
+  const openedOnce = React.useRef(false);
+  React.useEffect(() => {
+    if (!visible) {
+      openedOnce.current = false;
+      return;
+    }
+    if (openedOnce.current || !canBrowse || projectPath.trim()) return;
+    openedOnce.current = true;
+    browse();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, canBrowse]);
   const [baseUrl, setBaseUrl] = React.useState("");
   // set once the user edits the field, so a later probe cannot overwrite them
   const [baseUrlTouched, setBaseUrlTouched] = React.useState(false);
@@ -131,19 +168,40 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
         <View style={styles.modal}>
           <Text style={styles.title}>Scan Project</Text>
           <Text style={styles.subtitle}>
-            enter the path to a Node.js project folder
+            {canBrowse
+              ? "pick a Node.js project folder, or paste a path"
+              : "enter the path to a Node.js project folder"}
           </Text>
 
-          <TextInput
-            style={styles.input}
-            placeholder="/Users/you/projects/my-api"
-            placeholderTextColor={colors.textDim}
-            value={projectPath}
-            onChangeText={setProjectPath}
-            autoCapitalize="none"
-            autoCorrect={false}
-            editable={!scanning}
-          />
+          <View style={styles.pathRow}>
+            <TextInput
+              style={[styles.input, styles.pathInput]}
+              placeholder="/Users/you/projects/my-api"
+              placeholderTextColor={colors.textDim}
+              value={projectPath}
+              onChangeText={setProjectPath}
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!scanning}
+            />
+            {/* Only in the desktop app, because only there is there a file
+                system to open. On macOS this is also what makes writing work:
+                choosing a folder in a real dialog is the act that grants the app
+                access to it, which typing the same path never does. */}
+            {canBrowse && (
+              <Pressable
+                disabled={scanning}
+                onPress={browse}
+                style={({ hovered }: any) => [
+                  styles.browseBtn,
+                  hovered && styles.browseBtnHover,
+                  scanning && styles.browseBtnDisabled,
+                ]}
+              >
+                <Text style={styles.browseText}>Browse…</Text>
+              </Pressable>
+            )}
+          </View>
 
           {/* the path is long and typed from memory, and most scans are of a
               folder already scanned once */}
@@ -245,6 +303,19 @@ export default function ScanModal({ visible, onClose, onScan, scanning, error, r
 }
 
 const styles = StyleSheet.create({
+  pathRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  pathInput: { flex: 1 },
+  browseBtn: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    ...transition("background-color"),
+  },
+  browseBtnHover: { backgroundColor: colors.hover },
+  browseBtnDisabled: { opacity: 0.45 },
+  browseText: { color: colors.textMuted, fontSize: 12 },
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.7)",

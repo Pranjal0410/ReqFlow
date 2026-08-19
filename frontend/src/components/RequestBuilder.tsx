@@ -204,12 +204,18 @@ export default function RequestBuilder({
             shown empty, since a count of none is not worth the width. */}
         {exampleCount > 0 && (
           <Pressable
-            style={({ hovered }: any) => [styles.curlBtn, hovered && styles.curlBtnHover]}
+            style={({ hovered }: any) => [styles.historyBtn, hovered && styles.historyBtnHover]}
             onPress={onOpenExamples}
             accessibilityLabel={`${exampleCount} previous runs of this endpoint`}
           >
-            <Icon name="history" size={14} color={colors.textDim} />
-            <Text style={styles.curlText}>{exampleCount}</Text>
+            <Icon name="history" size={14} color={colors.text} />
+            {/* An icon and a number said nothing about what pressing it would
+                do, and it sat in the same grey as the buttons either side of
+                it — so what this endpoint had already returned stayed hidden
+                behind a badge nobody read. */}
+            <Text style={styles.historyText}>
+              {exampleCount} {exampleCount === 1 ? "run" : "runs"}
+            </Text>
           </Pressable>
         )}
 
@@ -488,6 +494,30 @@ const styles = StyleSheet.create({
     fontFamily: "monospace",
     ...shadow.sm,
     ...transition("box-shadow, background-color"),
+  },
+  // The palette is deliberately neutral — colour in this app means status, not
+  // decoration. So this stands out by contrast rather than by hue: a border and
+  // full-strength text where its neighbours have neither.
+  historyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.textDim,
+    backgroundColor: colors.surfaceLight,
+    ...shadow.sm,
+    ...transition("background-color"),
+  },
+  historyBtnHover: {
+    backgroundColor: colors.hover,
+  },
+  historyText: {
+    color: colors.text,
+    fontSize: 12,
+    fontWeight: "500",
   },
   curlBtn: {
     flexDirection: "row",

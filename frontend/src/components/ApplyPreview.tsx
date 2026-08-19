@@ -13,6 +13,11 @@ interface Props {
   // its own rather than the code view appearing to hang
   loading: boolean;
   error: string | null;
+  // Offered only when the write was refused for want of permission, and only in
+  // the desktop app. Choosing the folder is the act that grants access to it on
+  // macOS, so the way out of this failure is a dialog rather than a trip to
+  // System Settings.
+  onChooseFolder: (() => void) | null;
   applying: boolean;
   onCancel: () => void;
   onApply: () => void;
@@ -60,6 +65,7 @@ export default function ApplyPreview({
   plan,
   loading,
   error,
+  onChooseFolder,
   applying,
   onCancel,
   onApply,
@@ -96,7 +102,19 @@ export default function ApplyPreview({
             </View>
           )}
 
-          {!!error && !loading && (
+          {!!error && !loading && !!onChooseFolder && (
+            <View style={styles.recover}>
+              <Text style={styles.error}>{error}</Text>
+              <Pressable
+                onPress={onChooseFolder}
+                style={({ hovered }: any) => [styles.recoverBtn, hovered && styles.recoverBtnHover]}
+              >
+                <Text style={styles.recoverText}>Choose the folder</Text>
+              </Pressable>
+            </View>
+          )}
+
+          {!!error && !loading && !onChooseFolder && (
             <View style={styles.centred}>
               <Text style={styles.error}>{error}</Text>
             </View>
@@ -243,6 +261,21 @@ export default function ApplyPreview({
 }
 
 const styles = StyleSheet.create({
+  recover: {
+    gap: 10,
+    alignItems: "flex-start",
+    paddingVertical: 18,
+  },
+  recoverBtn: {
+    borderWidth: 1,
+    borderColor: colors.text,
+    borderRadius: radius.md,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    ...transition("background-color"),
+  },
+  recoverBtnHover: { backgroundColor: colors.hover },
+  recoverText: { color: colors.text, fontSize: 12, fontWeight: "500" },
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.7)",

@@ -126,8 +126,10 @@ export default function TestRunner({ tests, onChange, response }: Props) {
             )}
 
             {/* remove */}
-            <TouchableOpacity onPress={() => removeTest(test.id)}>
+            <TouchableOpacity
+              onPress={() => removeTest(test.id)}
               accessibilityLabel="remove this check"
+            >
               <Icon name="close" size={14} color={colors.textDim} />
             </TouchableOpacity>
           </View>

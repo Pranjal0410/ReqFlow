@@ -43,6 +43,13 @@ the code actually requires, not from a guess.
 endpoint with credentials stripped before anything reaches disk, assertions, and
 a timing breakdown measured on the backend rather than estimated.
 
+**Chains one request to the next.** A create answers with the id the next call
+needs and a login answers with the token every call needs. Say once where the
+value is — `data.id`, `token` — and what to call it, and it goes into `{{name}}`
+after every send, for the whole workspace and for the rest of a Run all. The
+Capture tab offers the paths it can see in the response in front of you, so the
+first rule is a click rather than a path typed from memory.
+
 **Writes endpoints.** The model answers with a structured plan, not text to
 paste. Paths are snapped to the project's real files — an endpoint about
 incidents is written against your incidents router, not whichever router scored
@@ -57,6 +64,12 @@ endpoint that takes an `:id` gets a real one, looked up from your own running
 server — signing in first when the list needs it — so `PATCH /incidents/:id/x`
 can actually be checked. Ids in the request body are looked up the same way,
 because an invented one makes a correct endpoint answer 400.
+
+**Runs without the app.** Save the workspace as `reqflow.collection.json` beside
+the code it tests, commit it, and `reqflow run` replays it — same requests, same
+chaining, same assertions, exit 1 when one fails. Credentials never reach the
+file: a token or a password becomes `{{name}}`, and the value is supplied with
+`--var name=value` at run time.
 
 **Says what happened.** The verdict panel lists what was written, which server
 answered, which record was used, and every request with its status. When
@@ -167,6 +180,23 @@ being unsigned:
   build is signed ad-hoc, so the system treats each one as a new app and asks
   again. Allow it.
 
+### Running a collection from the command line
+
+```bash
+cd cli && npm install
+
+# from anywhere inside the project — it looks for the file here and above
+node <path-to-reqflow>/cli/bin/reqflow run
+
+node .../cli/bin/reqflow run --var password=hunter2       # what the file cannot hold
+node .../cli/bin/reqflow run --base-url https://staging   # the same requests, elsewhere
+node .../cli/bin/reqflow run --json                       # for something else to read
+```
+
+Exits 1 if an assertion failed or a request could not be made, which is what
+makes it usable as a CI step. A collection with no assertions in it exits 0 and
+says so, rather than looking like a run that verified something.
+
 ### Running the model on your machine
 
 Set `LLM_PROVIDER=embedded` with a `.gguf` path, or `local` with an
@@ -177,9 +207,10 @@ numbers.
 ## Tests
 
 ```bash
-cd backend && npm test     # 375
-cd frontend && npm test    # 134
-cd desktop && npm test     # 59
+cd backend && npm test     # 429
+cd frontend && npm test    # 189
+cd desktop && npm test     # 66, needs 4000 and 4179 free
+cd cli && npm test         # 16
 ```
 
 The backend covers the proxy, the target guard, the scan and its cache, the
@@ -193,7 +224,10 @@ server, including all three ways ReqFlow can relate to it. Gemini is mocked, so
 they run offline and cost nothing.
 
 The frontend suite covers `src/lib`: variables, query and path parameters, url
-normalisation, timings, what a saved example keeps, and what survives a restart.
+normalisation, timings, what a saved example keeps, what a response hands to the
+next request, what a collection may and may not carry out of the app, and what
+survives a restart. The cli suite runs collections against a real server started
+inside the test, because the thing worth checking is a run against one.
 The redaction tests are the ones worth reading — they decide whether a token
 reaches disk.
 

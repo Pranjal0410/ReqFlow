@@ -3,6 +3,8 @@
 // edited again, and the value is substituted on the way out, the same way
 // {{variables}} are.
 
+import { substitute } from "./variables";
+
 export const PATH_PARAM = /:([A-Za-z0-9_]+)/g;
 
 export function namesIn(url: string): string[] {
@@ -14,13 +16,30 @@ export function namesIn(url: string): string[] {
   return out;
 }
 
-export function applyPathParams(url: string, values: Record<string, string>): string {
+// The comment at the top of this file said the value was substituted the same
+// way {{variables}} are. It was not: {{ }} was resolved in the url, the headers
+// and the body, and never in the value filled in for a placeholder — which is
+// the one place a captured id is most likely to be typed. It went out encoded,
+// as %7B%7Bid%7D%7D, and the server answered with something about a malformed
+// id that named nothing anyone had written.
+export function applyPathParams(
+  url: string,
+  values: Record<string, string>,
+  vars: Record<string, string> = {}
+): string {
   return url.replace(PATH_PARAM, (whole, name) => {
     if (!/^[A-Za-z_]/.test(name)) return whole;
-    const value = values[name];
+    const raw = values[name];
+    if (!raw) return whole;
+
+    const value = substitute(raw, vars);
+    // a name with nothing behind it stays a placeholder. Encoding the braces
+    // and sending them is how this went wrong in the first place.
+    if (/\{\{.*\}\}/.test(value)) return whole;
+
     // an unfilled one is left as written, so the request fails somewhere
     // obvious instead of silently hitting /api/incidents//notes
-    return value ? encodeURIComponent(value) : whole;
+    return encodeURIComponent(value);
   });
 }
 

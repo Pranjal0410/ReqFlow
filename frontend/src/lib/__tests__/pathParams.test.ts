@@ -93,3 +93,27 @@ describe("matchTemplate", () => {
     });
   });
 });
+
+describe("a {{variable}} used as a placeholder's value", () => {
+  it("is resolved, not encoded and sent", () => {
+    expect(
+      applyPathParams("/api/users/:id", { id: "{{id}}" }, { id: "6a860eee" })
+    ).toBe("/api/users/6a860eee");
+  });
+
+  // %7B%7Bid%7D%7D reaching the server produced an error about a malformed id
+  // that named nothing anyone had typed
+  it("leaves the placeholder alone when the name has no value behind it", () => {
+    expect(applyPathParams("/api/users/:id", { id: "{{id}}" }, {})).toBe("/api/users/:id");
+  });
+
+  it("still encodes a plain value that needs it", () => {
+    expect(applyPathParams("/api/users/:id", { id: "a b/c" }, {})).toBe("/api/users/a%20b%2Fc");
+  });
+
+  it("resolves a name embedded in a longer value", () => {
+    expect(
+      applyPathParams("/api/users/:id", { id: "user-{{id}}" }, { id: "7" })
+    ).toBe("/api/users/user-7");
+  });
+});

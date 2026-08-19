@@ -169,10 +169,23 @@ export default function SettingsPanel({
               }
             >
               <View style={styles.statusPair}>
+                {/* Three states, not two. The window opens before the backend
+                    does, so for the first few seconds there is no answer yet —
+                    and a red dot then says the key was rejected, which is a
+                    different thing from not having asked. Someone opening
+                    Settings during those seconds read the app as broken and
+                    re-entered a key that was already working. Grey until the
+                    provider has actually answered. */}
                 <View
                   style={[
                     styles.dot,
-                    { backgroundColor: model?.ok ? colors.statusOk : colors.statusErr },
+                    {
+                      backgroundColor: !model
+                        ? colors.textDim
+                        : model.ok
+                          ? colors.statusOk
+                          : colors.statusErr,
+                    },
                   ]}
                 />
                 <Pressable

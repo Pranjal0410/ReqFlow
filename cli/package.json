@@ -3,21 +3,25 @@
   "version": "1.0.0",
   "private": true,
   "description": "Run a ReqFlow collection without the app",
-  "bin": { "reqflow": "./bin/reqflow" },
+  "bin": {
+    "reqflow": "./bin/reqflow"
+  },
   "scripts": {
     "run:collection": "tsx src/index.ts",
     "test": "jest"
   },
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "axios": "^1.7.7"
+    "axios": "^1.7.7",
+    "tsx": "^4.19.2"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^22.9.0",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.5",
-    "tsx": "^4.19.2",
     "typescript": "^5.6.3"
   }
 }

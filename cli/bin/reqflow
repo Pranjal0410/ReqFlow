@@ -5,8 +5,31 @@
 // main() is called here rather than left to a require.main check inside the
 // module, because loaded through this launcher that check is never true and the
 // command exited zero having done nothing at all.
-require("tsx/cjs");
+// A missing dependency here is a stack trace about tsx, which says nothing
+// about what to do. This says it.
+try {
+  require("tsx/cjs");
+} catch {
+  console.error("The runner is not installed. Run: npm install --prefix " + require("path").join(__dirname, ".."));
+  process.exit(1);
+}
+
 const path = require("path");
+const fs = require("fs");
+
+// The runner shares the app's own modules, which live in the sibling frontend
+// folder. Copying just this directory somewhere leaves them behind, and the
+// failure is a MODULE_NOT_FOUND about a file nobody went looking for.
+const shared = path.join(__dirname, "..", "..", "frontend", "src", "lib", "variables.ts");
+if (!fs.existsSync(shared)) {
+  console.error(
+    "reqflow run needs the whole ReqFlow repository, not just cli/.\n" +
+      "It reads the app's own request logic from ../frontend/src/lib, so that\n" +
+      "there is one definition of what an assertion means rather than two."
+  );
+  process.exit(1);
+}
+
 const { main } = require(path.join(__dirname, "..", "src", "index.ts"));
 
 main(process.argv.slice(2)).then(

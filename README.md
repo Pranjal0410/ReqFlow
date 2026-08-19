@@ -197,6 +197,67 @@ Exits 1 if an assertion failed or a request could not be made, which is what
 makes it usable as a CI step. A collection with no assertions in it exits 0 and
 says so, rather than looking like a run that verified something.
 
+The runner reads the app's own modules from `frontend/src/lib` — one definition
+of what an assertion means, not two that agree until the day they do not. So it
+needs the repository, not just `cli/`, and it says so plainly if it only has the
+one folder.
+
+### On every push
+
+The same command as a GitHub Actions step. This is the whole point of the exit
+code: nobody has to remember to check.
+
+```yaml
+name: API
+on: [push, pull_request]
+
+jobs:
+  requests:
+    runs-on: ubuntu-latest
+
+    # its own database, thrown away with the job. A run that writes into the
+    # real one changes what it is testing.
+    services:
+      mongo:
+        image: mongo:7
+        ports: ["27017:27017"]
+
+    env:
+      MONGODB_URI: mongodb://localhost:27017/ci
+      PORT: 3001
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: npm }
+      - run: npm ci
+
+      - name: Start the API
+        run: node src/index.js > /tmp/api.log 2>&1 &
+
+      - name: Wait for it to answer
+        run: |
+          for i in $(seq 1 30); do
+            curl -fsS -m 2 http://localhost:3001/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/api.log; exit 1
+
+      - name: Get the runner
+        uses: actions/checkout@v4
+        with: { repository: your-name/ReqFlow, path: .reqflow }
+      - working-directory: .reqflow/cli
+        run: npm ci
+
+      - name: Send the requests
+        run: node .reqflow/cli/bin/reqflow run --var password=${{ secrets.API_PASSWORD }}
+```
+
+An empty database has nobody to log in as, so a step before this one has to
+create the account the collection signs in with — read the email out of the
+collection rather than writing it down twice, or the day someone changes one
+the build fails for a reason that has nothing to do with the code.
+
 ### Running the model on your machine
 
 Set `LLM_PROVIDER=embedded` with a `.gguf` path, or `local` with an

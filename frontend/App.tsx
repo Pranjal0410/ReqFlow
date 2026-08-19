@@ -24,6 +24,8 @@ import {
   sendRequest,
   checkTarget,
   exportOpenApi,
+  saveCollection,
+  loadCollection,
   checkModel,
   cancelRun,
   runningProjects,
@@ -58,6 +60,7 @@ import {
 } from "./src/lib/persist";
 import { Variable, toMap, substitute, workspaceAuth } from "./src/lib/variables";
 import { runCaptures, withResults } from "./src/lib/capture";
+import { toCollection, fromCollection, FILENAME } from "./src/lib/collection";
 import { withScheme, originOf } from "./src/lib/url";
 import {
   addGenerated,
@@ -1439,6 +1442,44 @@ export default function App() {
           variables={variables}
           onVariablesChange={setVariables}
           onExportOpenApi={() => exportOpenApi(routes, projectName, baseUrl)}
+          onSaveCollection={
+            projectPath
+              ? async () => {
+                  const { path } = await saveCollection(
+                    projectPath,
+                    toCollection(tabs, variables, baseUrl, projectName)
+                  );
+                  return `saved to ${path.split("/").pop()}`;
+                }
+              : undefined
+          }
+          onLoadCollection={
+            projectPath
+              ? async () => {
+                  const { found, collection } = await loadCollection(projectPath);
+                  if (!found) return `no ${FILENAME}`;
+                  const read = fromCollection(collection);
+                  if (!read) return "nothing to load";
+
+                  // opened alongside what is already there rather than
+                  // replacing it: a load that quietly discarded the tabs
+                  // someone had open would be the last thing they wanted.
+                  setTabs((prev) => [...prev, ...read.tabs]);
+                  setActiveTabId(read.tabs[0].id);
+                  if (read.baseUrl) setBaseUrl(read.baseUrl);
+                  setVariables((prev) => {
+                    const next = [...prev];
+                    for (const v of read.variables) {
+                      // a value already in the workspace is the live one; the
+                      // file's copy of it was written empty on purpose
+                      if (!next.some((existing) => existing.key === v.key)) next.push(v);
+                    }
+                    return next;
+                  });
+                  return `loaded ${read.tabs.length}`;
+                }
+              : undefined
+          }
           generatedRoutes={generatedRoutes}
           onSelectGenerated={handleSelectGenerated}
           onClearGenerated={handleClearGenerated}

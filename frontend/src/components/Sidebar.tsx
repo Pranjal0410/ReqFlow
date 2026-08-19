@@ -36,6 +36,9 @@ interface Props {
   variables: Variable[];
   onVariablesChange: (vars: Variable[]) => void;
   onExportOpenApi: () => Promise<string>;
+  // absent until a project is open: there is nowhere to put the file before then
+  onSaveCollection?: () => Promise<string>;
+  onLoadCollection?: () => Promise<string>;
   // endpoints the agent wrote that the project does not have yet
   generatedRoutes: GeneratedRoute[];
   onSelectGenerated: (route: GeneratedRoute) => void;
@@ -64,6 +67,8 @@ export default function Sidebar({
   variables,
   onVariablesChange,
   onExportOpenApi,
+  onSaveCollection,
+  onLoadCollection,
   generatedRoutes,
   onSelectGenerated,
   onClearGenerated,
@@ -77,6 +82,20 @@ export default function Sidebar({
   const [activePath, setActivePath] = React.useState<string | null>(null);
   const [showVars, setShowVars] = React.useState(false);
   const [specCopied, setSpecCopied] = React.useState<string | null>(null);
+
+  // the note replaces the label for a moment, the way the OpenAPI copy does:
+  // a file written somewhere the user cannot see needs to say so
+  const [collectionNote, setCollectionNote] = React.useState<string | null>(null);
+  const withNote = async (run: () => Promise<string>) => {
+    try {
+      setCollectionNote(await run());
+    } catch (err: any) {
+      setCollectionNote(err?.message ? "failed" : "failed");
+    }
+    setTimeout(() => setCollectionNote(null), 2600);
+  };
+  const saveCollectionFile = () => onSaveCollection && withNote(onSaveCollection);
+  const loadCollectionFile = () => onLoadCollection && withNote(onLoadCollection);
 
   const copySpec = async () => {
     try {
@@ -218,6 +237,29 @@ export default function Sidebar({
         >
           <Text style={styles.exportText}>{specCopied || "Copy as OpenAPI"}</Text>
         </Pressable>
+      )}
+
+      {/* The requests themselves, as a file in the project. Separate from the
+          OpenAPI export above, which describes the routes the scan found: this
+          is what was built on top of them — what each one sends, asserts and
+          hands to the next — and it is the file `reqflow run` replays. */}
+      {onSaveCollection && (
+        <View style={styles.collectionRow}>
+          <Pressable
+            style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+            onPress={saveCollectionFile}
+          >
+            <Text style={styles.exportText}>{collectionNote || "Save collection"}</Text>
+          </Pressable>
+          {onLoadCollection && (
+            <Pressable
+              style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+              onPress={loadCollectionFile}
+            >
+              <Text style={styles.exportText}>Load</Text>
+            </Pressable>
+          )}
+        </View>
       )}
 
       <TextInput
@@ -585,6 +627,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     ...shadow.sm,
   },
+  collectionRow: { flexDirection: "row", gap: 6 },
   exportBtn: {
     paddingVertical: 6,
     paddingHorizontal: 9,

@@ -242,3 +242,27 @@ export async function exportOpenApi(
   const res = await withTimeout(axios.post(`${BASE}/analyze/openapi`, { routes, title, baseUrl }, { timeout: TIMEOUTS.quick }), "the OpenAPI document")
   return JSON.stringify(res.data, null, 2);
 }
+
+// The workspace as a file beside the code it tests. Written by the backend
+// rather than downloaded, because a file in the project is what can be
+// committed, reviewed, and run by `reqflow run` without the app.
+export async function saveCollection(
+  projectPath: string,
+  collection: any
+): Promise<{ written: boolean; path: string }> {
+  const res = await withTimeout(
+    axios.post(`${BASE}/collection`, { projectPath, collection }, { timeout: TIMEOUTS.quick }),
+    "saving the collection"
+  );
+  return res.data;
+}
+
+export async function loadCollection(
+  projectPath: string
+): Promise<{ found: boolean; path: string; collection?: any }> {
+  const res = await withTimeout(
+    axios.get(`${BASE}/collection`, { params: { projectPath }, timeout: TIMEOUTS.quick }),
+    "reading the collection"
+  );
+  return res.data;
+}

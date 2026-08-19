@@ -17,6 +17,20 @@ export function isSecretVariable(name: string): boolean {
   return SECRET_NAME.test(name.trim());
 }
 
+// header names whose value is a credential. These never reach the workspace
+// blob, which on web is localStorage and survives until something clears it,
+// and never reach an exported collection, which is meant to be committed.
+//
+// It lives here rather than in persist.ts because persist.ts pulls in
+// react-native and the storage adapter, and the two things that need this most
+// — the test runner and the command line runner — have neither.
+const SECRET_HEADER = /^(authorization|cookie|proxy-authorization)$/i;
+const SECRET_HINT = /(token|secret|password|api[-_]?key)/i;
+
+export function isSecretHeader(name: string): boolean {
+  return SECRET_HEADER.test(name.trim()) || SECRET_HINT.test(name.trim());
+}
+
 export function toMap(vars: Variable[]): Record<string, string> {
   const map: Record<string, string> = {};
   for (const v of vars) {

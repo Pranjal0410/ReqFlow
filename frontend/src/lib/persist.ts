@@ -19,15 +19,9 @@ import { ExampleStore, ExampleLimit, coerceLimit } from "./examples";
 const KEY = "reqflow.workspace.v1";
 const SECRETS_KEY = "reqflow.secrets.v1";
 
-// header names whose value is a credential. these never reach the workspace
-// blob, which on web is localStorage and survives until something clears it.
-const SECRET_HEADER =
-  /^(authorization|cookie|proxy-authorization)$/i;
-const SECRET_HINT = /(token|secret|password|api[-_]?key)/i;
-
-export function isSecretHeader(name: string): boolean {
-  return SECRET_HEADER.test(name.trim()) || SECRET_HINT.test(name.trim());
-}
+import { isSecretHeader } from "./variables";
+// re-exported so the callers that already take it from here keep working
+export { isSecretHeader };
 
 export interface Workspace {
   version: 1;

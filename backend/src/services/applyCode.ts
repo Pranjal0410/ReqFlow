@@ -425,7 +425,19 @@ function assembleFile(existing: string | null, code: string): BuiltFile {
   const { content: withoutOld, replaced } = replaceDeclarations(existing, block);
   existing = withoutOld;
 
-  const at = insertAboveLine(existing);
+  // Where a route has to go, rather than where new code usually goes.
+  //
+  // Express matches in registration order, so a new GET /summary appended below
+  // an existing GET /:id is never reached — the file grows, the server boots,
+  // and every request for it is answered by /:id with id="summary". Warning
+  // about that was already right and was already not enough: the same endpoint
+  // was applied three times and landed in the same dead spot each time.
+  //
+  // The placement is not a preference. Express's own rule decides it: above the
+  // route that would otherwise match first.
+  const blocked = shadowedRoutes(existing, block)[0];
+
+  const at = blocked ? blocked.line : insertAboveLine(existing);
   const lines = existing.split("\n");
 
   // one blank line either side, so the new block reads as its own thing rather

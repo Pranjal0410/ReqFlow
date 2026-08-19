@@ -874,3 +874,54 @@ const setCommander = async (id) => User.findById(id);`;
     expect(undefinedNames(block, service)).toContain("userService");
   });
 });
+
+// Warning about a route that can never be reached was right, and was not enough:
+// the same endpoint was applied three times and landed in the same dead spot
+// each time, below the /:id that swallows it. Express's own matching rule says
+// where it has to go, so that is where it goes.
+describe("a route that would be shadowed is placed above the one shadowing it", () => {
+  const router = `const express = require('express');
+const router = express.Router();
+
+router.get('/', async (req, res) => res.json([]));
+
+router.get('/:id', async (req, res) => res.json({}));
+
+module.exports = router;
+`;
+
+  const block = `router.get('/summary', async (req, res) => {
+  res.json({ total: 0 });
+});`;
+
+  it("puts it before the route that would match first", () => {
+    const next = buildContent(router, block).nextContent;
+    const lines = next.split("\n");
+    const summary = lines.findIndex((l) => l.includes("router.get('/summary'"));
+    const byId = lines.findIndex((l) => l.includes("router.get('/:id'"));
+
+    expect(summary).toBeGreaterThan(-1);
+    expect(summary).toBeLessThan(byId);
+  });
+
+  it("leaves the file parseable, which the placement must not cost", () => {
+    expect(parseError("routes.js", buildContent(router, block).nextContent)).toBeNull();
+  });
+
+  it("does not disturb a route that nothing shadows", () => {
+    const safe = `router.get('/:id/notes', async (req, res) => res.json([]));`;
+    const next = buildContent(router, safe).nextContent;
+    const lines = next.split("\n");
+    // no reason to move it up, so it goes where new code goes
+    expect(lines.findIndex((l) => l.includes("/:id/notes"))).toBeGreaterThan(
+      lines.findIndex((l) => l.includes("router.get('/:id'"))
+    );
+  });
+
+  it("keeps the existing routes exactly as they were", () => {
+    const next = buildContent(router, block).nextContent;
+    expect(next).toContain("router.get('/', async (req, res) => res.json([]));");
+    expect(next).toContain("router.get('/:id', async (req, res) => res.json({}));");
+    expect(next).toContain("module.exports = router;");
+  });
+});

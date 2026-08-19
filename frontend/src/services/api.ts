@@ -147,6 +147,22 @@ export async function verifyGenerated(input: {
   return res.data;
 }
 
+// The code behind an endpoint the project already has.
+//
+// Generated endpoints carry their source; scanned ones do not, and "show me what
+// serves this" is the same question for both.
+export async function fetchRouteSource(
+  projectPath: string,
+  method: string,
+  path: string
+): Promise<{ found: boolean; file?: string; line?: number; code?: string; detail?: string }> {
+  const res = await withTimeout(
+    axios.post(`${BASE}/analyze/source`, { projectPath, method, path }, { timeout: TIMEOUTS.quick }),
+    "the code behind this endpoint"
+  );
+  return res.data;
+}
+
 // What Settings can change about the model.
 //
 // The key is not in here, in either direction it is read. It goes out when the

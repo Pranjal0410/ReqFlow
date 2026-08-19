@@ -38,6 +38,11 @@ interface Props {
   pending: { key: string; method: string; path: string; applied: boolean }[];
   activeKey: string | null;
   onSelectPending: (key: string) => void;
+  // Set when this is an endpoint the project already has, read off disk rather
+  // than written by the agent. There is nothing to apply — it is already there —
+  // so the whole apply half of this panel is put away and the file it came from
+  // is named instead.
+  source: { file: string; line: number } | null;
 }
 
 // every layer's code in one block, with the file each part belongs to marked,
@@ -77,6 +82,7 @@ export default function CodeView({
   pending,
   activeKey,
   onSelectPending,
+  source,
 }: Props) {
   const [active, setActive] = React.useState(0);
   const [copied, setCopied] = React.useState<string | null>(null);
@@ -178,6 +184,14 @@ export default function CodeView({
 
           {!!generated.summary && <Text style={styles.summary}>{generated.summary}</Text>}
 
+          {/* where this actually is, so "here is your endpoint" can be checked
+              against the file rather than taken on trust */}
+          {!!source && (
+            <Text style={styles.provenance}>
+              {source.file}:{source.line} — already in your project
+            </Text>
+          )}
+
           {/* the claim is "this matches your project". naming the files it was
               read from is what makes that checkable rather than a slogan */}
           {generated.references.length > 0 && (
@@ -246,7 +260,7 @@ export default function CodeView({
           {/* The argument, not the claim. It sits above the footer because it is
               the answer to what the developer just asked for, and the buttons
               underneath are what they might do next. */}
-          {!!applied && (
+          {!source && !!applied && (
             <VerificationPanel
               outcome={applied}
               files={evidence?.files || []}
@@ -272,7 +286,11 @@ export default function CodeView({
             {/* the verdict and its working are in the panel above; the footer
                 keeps the one promise that has to hold before any of it */}
             <Text style={styles.disclaimer} numberOfLines={2}>
-              {applied ? applied.text : "Nothing is written until you have read the diff."}
+              {source
+                ? "This is what your project runs for this endpoint, as it is on disk now."
+                : applied
+                ? applied.text
+                : "Nothing is written until you have read the diff."}
             </Text>
             <Pressable
               style={({ hovered }: any) => [styles.btn, hovered && styles.btnHover]}
@@ -313,22 +331,26 @@ export default function CodeView({
                 <Text style={styles.btnText}>Stop checking</Text>
               </Pressable>
             )}
-            <Pressable
-              disabled={!!applied}
-              style={({ hovered }: any) => [
-                styles.btnPrimary,
-                hovered && styles.btnPrimaryHover,
-                !!applied && styles.btnDisabled,
-              ]}
-              onPress={onPreviewApply}
-            >
-              <Icon name="arrowRight" size={13} color={colors.bg} />
-              {/* not "Applied": that is the half of the answer that is never in
-                  doubt, and the half that is in doubt is the one worth saying */}
-              <Text style={styles.btnPrimaryText}>
-                {!applied ? "Review changes" : verdictLabel(applied.verdict)}
-              </Text>
-            </Pressable>
+            {/* nothing to apply when the code is already in the project — the
+                primary action there is to go and call it */}
+            {!source && (
+              <Pressable
+                disabled={!!applied}
+                style={({ hovered }: any) => [
+                  styles.btnPrimary,
+                  hovered && styles.btnPrimaryHover,
+                  !!applied && styles.btnDisabled,
+                ]}
+                onPress={onPreviewApply}
+              >
+                <Icon name="arrowRight" size={13} color={colors.bg} />
+                {/* not "Applied": that is the half of the answer that is never in
+                    doubt, and the half that is in doubt is the one worth saying */}
+                <Text style={styles.btnPrimaryText}>
+                  {!applied ? "Review changes" : verdictLabel(applied.verdict)}
+                </Text>
+              </Pressable>
+            )}
           </View>
         </View>
       </View>

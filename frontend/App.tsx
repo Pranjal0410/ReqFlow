@@ -31,6 +31,7 @@ import {
   planGenerated,
   applyGenerated,
   verifyGenerated,
+  fetchRouteSource,
 } from "./src/services/api";
 import {
   DetectedRoute,
@@ -523,7 +524,44 @@ export default function App() {
     }
   };
 
-  const handleSelectRoute = (route: DetectedRoute) => {
+  // The code behind an endpoint the project already has.
+  //
+  // The same panel the agent's endpoints open in, because "show me what serves
+  // this" is the same question whether the code was written five minutes ago or
+  // five months ago. There is nothing to apply — it is already applied — so the
+  // panel names the file it came from instead.
+  const [routeSource, setRouteSource] = React.useState<{
+    method: string;
+    path: string;
+    file: string;
+    line: number;
+    code: string;
+  } | null>(null);
+
+  const handleSelectRoute = async (route: DetectedRoute) => {
+    if (stylePath) {
+      try {
+        const found = await fetchRouteSource(stylePath, route.method, route.path);
+        if (found.found && found.code) {
+          setRouteSource({
+            method: route.method,
+            path: route.path,
+            file: found.file || "",
+            line: found.line || 0,
+            code: found.code,
+          });
+          setShowCode(true);
+          return;
+        }
+      } catch {
+        // a lookup that fails must not swallow the click: opening the tab is
+        // what this row did before, and it is still a reasonable answer
+      }
+    }
+    openRouteTab(route);
+  };
+
+  const openRouteTab = (route: DetectedRoute) => {
     const newTab = createTab(baseUrl, route);
 
     // once a token is in the workspace, every route opened from the sidebar
@@ -1398,9 +1436,10 @@ export default function App() {
           screen at once put the code view on top of the Apply button, which
           made it unclickable — the panel looked open and did nothing. */}
       <CodeView
+        source={routeSource ? { file: routeSource.file, line: routeSource.line } : null}
         // everything the agent has written code for this session, so a turn that
         // produced two endpoints does not hide one of them
-        pending={Object.entries(generatedCode).map(([key, g]) => ({
+        pending={routeSource ? [] : Object.entries(generatedCode).map(([key, g]) => ({
           key,
           method: g.method,
           path: g.path,
@@ -1413,9 +1452,38 @@ export default function App() {
           setApplyError(null);
         }}
         visible={showCode && !showApply}
-        generated={generated}
-        onClose={() => setShowCode(false)}
-        onOpenRequest={handleOpenGeneratedRequest}
+        // one panel, two sources: the agent's code, or the project's own read
+        // off disk. The shape is the same because the question is the same.
+        generated={
+          routeSource
+            ? {
+                method: routeSource.method,
+                path: routeSource.path,
+                summary: "",
+                layers: [{ layer: "source", path: routeSource.file, code: routeSource.code }],
+                request: { headers: {}, body: null },
+                notes: [],
+                references: [],
+                verify: null,
+              }
+            : generated
+        }
+        onClose={() => {
+          setShowCode(false);
+          setRouteSource(null);
+        }}
+        onOpenRequest={
+          routeSource
+            ? () => {
+                const route = routes.find(
+                  (r) => r.method === routeSource.method && r.path === routeSource.path
+                );
+                setShowCode(false);
+                setRouteSource(null);
+                if (route) openRouteTab(route);
+              }
+            : handleOpenGeneratedRequest
+        }
         onPreviewApply={handlePreviewApply}
         applied={appliedOutcome}
         evidence={appliedEvidence}

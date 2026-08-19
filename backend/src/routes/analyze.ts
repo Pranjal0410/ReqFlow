@@ -6,7 +6,35 @@ import { buildOpenApi } from "../services/openapi";
 import { detectPort } from "../services/portDetector";
 import { DetectedRoute } from "../types";
 
+import { findRouteSource } from "../services/routeSource";
+
 const router = Router();
+
+// The code behind an endpoint the project already has.
+//
+// Generated endpoints carry their source with them; scanned ones do not, and
+// "show me what serves this" is the same question for both. Read-only: this
+// returns what is on disk and nothing here writes.
+router.post("/source", (req: Request, res: Response) => {
+  const { projectPath, method, path: routePath } = req.body || {};
+
+  if (!projectPath) return res.status(400).json({ error: "projectPath is required" });
+  if (!method || !routePath) return res.status(400).json({ error: "method and path are required" });
+
+  try {
+    const found = findRouteSource(String(projectPath), String(method), String(routePath));
+    if (!found) {
+      return res.json({
+        found: false,
+        // said in terms of what was looked for, so it can be checked
+        detail: `No handler for ${String(method).toUpperCase()} ${routePath} was found in this project's source.`,
+      });
+    }
+    res.json({ found: true, ...found });
+  } catch (err: any) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
 
 // re-scanning the same folder used to re-send every file to gemini, which is
 // the slowest part of a scan and the one with a daily quota. the fingerprint

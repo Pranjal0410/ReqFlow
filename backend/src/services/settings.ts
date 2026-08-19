@@ -53,6 +53,36 @@ export interface ModelSettings {
   writable: boolean;
 }
 
+// What Settings saved, applied over what the process was started with.
+//
+// dotenv reads <cwd>/.env and refuses to overwrite a variable that is already
+// set. Both of those are wrong here. The desktop wrapper keeps its settings
+// somewhere else entirely, and it passes the key it read at launch into the
+// child's environment — so a key the user changed afterwards would lose to the
+// one they replaced, every time the backend restarted.
+//
+// The settings file is the user's most recent decision, so for the handful of
+// variables this app owns, it wins. Nothing else in the environment is touched.
+export function loadSettingsFile(): void {
+  const file = settingsFile();
+  let text: string;
+  try {
+    text = fs.readFileSync(file, "utf-8");
+  } catch {
+    return;
+  }
+
+  for (const line of text.split("\n")) {
+    const match = /^\s*([A-Z0-9_]+)\s*=\s*(.*)$/.exec(line);
+    if (!match) continue;
+    const [, key, raw] = match;
+    if (!KEYS.includes(key as SettingKey)) continue;
+
+    const value = raw.trim().replace(/^['"]|['"]$/g, "");
+    if (value) process.env[key] = value;
+  }
+}
+
 export function readSettings(): ModelSettings {
   const file = settingsFile();
   return {

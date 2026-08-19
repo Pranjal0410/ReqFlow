@@ -1,5 +1,5 @@
 import { Router, Request, Response } from "express";
-import { getProvider, providerName } from "../services/llm";
+import { getProvider, providerName, disposeEmbedded } from "../services/llm";
 import { readableModelError } from "../services/modelErrors";
 import { coerceProvider, readSettings, writeSettings } from "../services/settings";
 
@@ -67,7 +67,16 @@ router.put("/", async (req: Request, res: Response) => {
     return res.status(400).json({ error: "nothing to change" });
   }
 
+  const wasEmbedded = providerName() === "embedded";
   const { saved, storedAt } = writeSettings(patch);
+
+  // Switching away from the in-process model leaves its weights loaded —
+  // gigabytes held for a provider nobody is using any more. Released here rather
+  // than on the next request, because there may not be a next request: someone
+  // who has just moved to Gemini has no reason to touch this app again today.
+  if (wasEmbedded && providerName() !== "embedded") {
+    await disposeEmbedded().catch(() => {});
+  }
 
   res.json({
     // applied either way: the setting is live in this process before the file is

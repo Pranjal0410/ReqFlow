@@ -1,4 +1,10 @@
 import "dotenv/config";
+import { loadSettingsFile } from "./services/settings";
+
+// After dotenv, and deliberately over it: whatever the user last chose in
+// Settings outranks both the file next to the source and the environment the
+// wrapper started this process with.
+loadSettingsFile();
 import express from "express";
 import cors from "cors";
 import analyzeRouter from "./routes/analyze";

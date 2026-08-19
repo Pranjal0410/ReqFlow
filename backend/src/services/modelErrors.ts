@@ -37,12 +37,15 @@ export function readableModelError(err: any): string {
   if (QUOTA_SPENT.test(raw)) {
     return (
       "The model's daily quota is used up, so asking again will not help until it resets. " +
-      "Everything above already happened. Add billing to the key in backend/.env, or switch " +
-      "to a local model in Settings to keep working offline."
+      "Everything above already happened. Put a different key in Settings, add billing to the " +
+      "one you have, or switch to a local model to keep working offline."
     );
   }
   if (/api[_ ]?key|permission|401|403/i.test(raw)) {
-    return "The model rejected the API key. Check GEMINI_API_KEY in backend/.env.";
+    // Settings can set the key now, so this points at the screen the developer
+    // is most likely already looking at rather than at a file they would have to
+    // go and find.
+    return "The model rejected the API key. Put a new one in Settings, or check GEMINI_API_KEY in backend/.env.";
   }
   if (RETRYABLE.test(raw)) {
     return "The model is busy right now. Everything above already happened; ask again to carry on.";

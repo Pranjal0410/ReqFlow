@@ -7,6 +7,7 @@ import {
   readSettings,
   writeSettings,
   settingsFile,
+  loadSettingsFile,
 } from "../services/settings";
 
 // A settings screen that rewrites a developer's .env from scratch is a settings
@@ -122,5 +123,58 @@ describe("readSettings", () => {
   it("treats whitespace as no key at all", () => {
     process.env.GEMINI_API_KEY = "   ";
     expect(readSettings().keySet).toBe(false);
+  });
+});
+
+// dotenv reads <cwd>/.env and will not overwrite a variable that is already set.
+// Both are wrong for the desktop app: it keeps settings elsewhere, and it passes
+// the key it read at launch into the child's environment — so a key changed
+// afterwards lost to the one it replaced every time the backend restarted.
+describe("loadSettingsFile", () => {
+  let dir: string;
+  const before = { ...process.env };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-load-"));
+    process.env.REQFLOW_SETTINGS_FILE = path.join(dir, ".env");
+  });
+
+  afterEach(() => {
+    process.env = { ...before };
+  });
+
+  it("overrides what the process was started with", () => {
+    process.env.GEMINI_API_KEY = "the-old-key";
+    fs.writeFileSync(settingsFile(), "GEMINI_API_KEY=the-new-key\n");
+
+    loadSettingsFile();
+    expect(process.env.GEMINI_API_KEY).toBe("the-new-key");
+  });
+
+  it("touches nothing outside the settings it owns", () => {
+    process.env.PATH = "/usr/bin";
+    fs.writeFileSync(settingsFile(), "PATH=/tmp/evil\nLLM_PROVIDER=local\n");
+
+    loadSettingsFile();
+    expect(process.env.PATH).toBe("/usr/bin");
+    expect(process.env.LLM_PROVIDER).toBe("local");
+  });
+
+  it("strips the quotes a hand-edited file may carry", () => {
+    fs.writeFileSync(settingsFile(), 'GEMINI_API_KEY="quoted-key"\n');
+    loadSettingsFile();
+    expect(process.env.GEMINI_API_KEY).toBe("quoted-key");
+  });
+
+  it("leaves a commented-out setting alone", () => {
+    process.env.LLM_PROVIDER = "gemini";
+    fs.writeFileSync(settingsFile(), "# LLM_PROVIDER=local\n");
+    loadSettingsFile();
+    expect(process.env.LLM_PROVIDER).toBe("gemini");
+  });
+
+  it("says nothing when there is no file yet", () => {
+    process.env.REQFLOW_SETTINGS_FILE = path.join(dir, "missing", ".env");
+    expect(() => loadSettingsFile()).not.toThrow();
   });
 });

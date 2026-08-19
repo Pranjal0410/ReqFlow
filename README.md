@@ -155,8 +155,10 @@ others. `desktop/README.md` covers packaging in more detail.
 
 The app serves its own window on **4179** and runs the backend on **4000**.
 
-On first launch it asks which engine to use and then for an API key, which it
-stores through the OS keychain. Two things to expect on macOS, both from the app
+On first launch it asks which engine to use and then for an API key. It stores
+the key through the OS keychain where the system allows it, and otherwise in a
+file inside the app's own data folder that only your account can read. Settings
+shows which of the two it used. Two things to expect on macOS, both from the app
 being unsigned:
 
 - **Gatekeeper.** Opened from a download, macOS refuses it. Right-click the app
@@ -220,9 +222,9 @@ benchmark found in ReqFlow itself.
 Requests are proxied through the backend, which refuses anything that is not a
 loopback or private address. Generated files are confined to the project folder;
 a path that resolves outside it is refused. Saved examples have their
-credentials removed before they are written. The API key is stored through the
-OS keychain in the desktop app, and in `backend/.env` otherwise — neither is ever
-committed.
+credentials removed before they are written. The API key lives in the OS keychain
+in the desktop app, or in a file only your account can read when the keychain is
+unavailable, and in `backend/.env` otherwise — none of them is ever committed.
 
 ## Troubleshooting
 

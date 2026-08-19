@@ -2,7 +2,7 @@ import { Router, Request, Response } from "express";
 import { generateEndpoint, GeneratedLayer, VerifyPlan } from "../services/codegen";
 import { UnreadableFolderError } from "../services/fileReader";
 import { coerceInstructions } from "../services/instructions";
-import { planApply, applyPlan, OutsideProjectError } from "../services/applyCode";
+import { planApply, applyPlan, OutsideProjectError, AccessDenied } from "../services/applyCode";
 import { waitForServer } from "../services/readiness";
 import { beginRun, endRun, cancelRun } from "../services/cancellation";
 import { restartProject, startProject, isOurs, Ownership } from "../services/projectRunner";
@@ -54,6 +54,13 @@ function readLayers(raw: any): GeneratedLayer[] | null {
 function writeFailed(err: any, res: Response) {
   if (err instanceof OutsideProjectError) return res.status(400).json({ error: err.message });
   if (err instanceof UnreadableFolderError) return res.status(403).json({ error: err.message });
+
+  // Named so the app can offer the folder dialog rather than only quoting the
+  // sentence that tells the developer to go and find it themselves.
+  if (err instanceof AccessDenied && err.recoverable) {
+    return res.status(403).json({ error: err.message, code: "ACCESS_DENIED", errno: err.errno });
+  }
+
   return res.status(500).json({ error: err.message });
 }
 
@@ -84,7 +91,7 @@ router.post("/plan", (req: Request, res: Response) => {
 // The write itself. The plan is rebuilt here from the same two inputs rather
 // than accepted from the client: a request that could name its own destination
 // and contents would be a write-anything endpoint wearing a preview.
-router.post("/apply", (req: Request, res: Response) => {
+router.post("/apply", async (req: Request, res: Response) => {
   const { projectPath, layers } = req.body;
   const parsed = readLayers(layers);
 
@@ -92,7 +99,7 @@ router.post("/apply", (req: Request, res: Response) => {
   if (!parsed) return res.status(400).json({ error: "layers must each have a path and code" });
 
   try {
-    res.json({ applied: applyPlan(planApply(String(projectPath), parsed)) });
+    res.json({ applied: await applyPlan(planApply(String(projectPath), parsed)) });
   } catch (err: any) {
     writeFailed(err, res);
   }

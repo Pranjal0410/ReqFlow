@@ -16,6 +16,8 @@ import {
   boundNames,
   dropKnownImports,
   shadowedRoutes,
+  deniedMessage,
+  AccessDenied,
 } from "../services/applyCode";
 
 function tempProject(): string {
@@ -136,20 +138,20 @@ describe("planApply", () => {
 });
 
 describe("applyPlan", () => {
-  it("creates directories a new layer file needs", () => {
+  it("creates directories a new layer file needs", async () => {
     const root = tempProject();
-    applyPlan(planApply(root, [{ layer: "service", path: "src/services/new.js", code: "const a = 1;" }]));
+    await applyPlan(planApply(root, [{ layer: "service", path: "src/services/new.js", code: "const a = 1;" }]));
     expect(fs.readFileSync(path.join(root, "src/services/new.js"), "utf-8")).toBe("const a = 1;\n");
     fs.rmSync(root, { recursive: true, force: true });
   });
 
   // a folder with no git in it has no undo, so one is made
-  it("backs up an edited file when the project is not a repo", () => {
+  it("backs up an edited file when the project is not a repo", async () => {
     const root = tempProject();
     const file = path.join(root, "routes.js");
     fs.writeFileSync(file, ROUTER_FILE);
 
-    const applied = applyPlan(
+    const applied = await applyPlan(
       planApply(root, [{ layer: "router", path: "routes.js", code: "router.post('/', create);" }])
     );
 
@@ -158,7 +160,7 @@ describe("applyPlan", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("leaves no backup behind when git already is one", () => {
+  it("leaves no backup behind when git already is one", async () => {
     const root = tempProject();
     execFileSync("git", ["init", "-q"], { cwd: root });
     fs.writeFileSync(path.join(root, "routes.js"), ROUTER_FILE);
@@ -168,18 +170,18 @@ describe("applyPlan", () => {
     ]);
     expect(plan.backups).toBe(false);
 
-    const applied = applyPlan(plan);
+    const applied = await applyPlan(plan);
     expect(applied[0].backup).toBeNull();
     expect(fs.existsSync(path.join(root, `routes.js${BACKUP_SUFFIX}`))).toBe(false);
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("stops when a planned new file appeared in the meantime", () => {
+  it("stops when a planned new file appeared in the meantime", async () => {
     const root = tempProject();
     const plan = planApply(root, [{ layer: "service", path: "new.js", code: "const a = 1;" }]);
 
     fs.writeFileSync(path.join(root, "new.js"), "someone else got here first");
-    expect(() => applyPlan(plan)).toThrow(/changed on disk/);
+    await expect(applyPlan(plan)).rejects.toThrow(/changed on disk/);
     expect(fs.readFileSync(path.join(root, "new.js"), "utf-8")).toBe("someone else got here first");
     fs.rmSync(root, { recursive: true, force: true });
   });
@@ -307,7 +309,7 @@ module.exports = router;
 // built against the original and the second write lands on a file the first has
 // already changed — refused as "changed on disk", which is true and useless.
 describe("planApply with two layers in one file", () => {
-  it("folds them into a single change", () => {
+  it("folds them into a single change", async () => {
     const root = tempProject();
     fs.writeFileSync(path.join(root, "svc.js"), "const a = 1;\n\nmodule.exports = { a };\n");
 
@@ -320,7 +322,7 @@ describe("planApply with two layers in one file", () => {
     expect(plan.files[0].nextContent).toContain("function b()");
     expect(plan.files[0].nextContent).toContain("function c()");
 
-    applyPlan(plan);
+    await applyPlan(plan);
     const after = fs.readFileSync(path.join(root, "svc.js"), "utf-8");
     expect(after).toContain("function b()");
     expect(after).toContain("function c()");
@@ -923,5 +925,65 @@ module.exports = router;
     expect(next).toContain("router.get('/', async (req, res) => res.json([]));");
     expect(next).toContain("router.get('/:id', async (req, res) => res.json({}));");
     expect(next).toContain("module.exports = router;");
+  });
+});
+
+// "EACCES: permission denied, open '/Users/.../routes/users.js'" was the whole
+// message, and none of it says what to do. On macOS the usual cause is not file
+// permissions at all — the folder is under Documents or Desktop and the system
+// withholds it from an app that has not been granted access.
+describe("a write the system refuses", () => {
+  const denied = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+
+  it("names both causes, because they look identical from here", () => {
+    const said = deniedMessage(denied, "src/routes/users.js", "/Users/x/Documents/api/src/routes/users.js");
+    // a file that is simply read-only is not a privacy setting, and sending
+    // someone to System Settings for that wastes the trip
+    expect(said).toMatch(/read-only/);
+    expect(said).toMatch(/Documents, Desktop or Downloads/);
+    expect(said).toMatch(/Privacy & Security/);
+  });
+
+  it("puts the checkable cause first", () => {
+    const said = deniedMessage(denied, "a.js", "/Users/x/Documents/p/a.js");
+    expect(said.indexOf("read-only")).toBeLessThan(said.indexOf("macOS"));
+  });
+
+  it("points at the dialog, since choosing a folder is what grants it", () => {
+    const said = deniedMessage(denied, "a.js", "/Users/x/Desktop/p/a.js");
+    expect(said).toMatch(/Scan Project/);
+  });
+
+  it("says plainly that nothing was written", () => {
+    expect(deniedMessage(denied, "a.js", "/Users/x/Desktop/p/a.js")).toMatch(/Nothing was written/);
+  });
+
+  it("does not blame macOS for a folder macOS does not protect", () => {
+    const said = deniedMessage(denied, "a.js", "/opt/srv/a.js");
+    expect(said).not.toMatch(/Documents, Desktop/);
+    expect(said).not.toMatch(/Privacy & Security/);
+    expect(said).toMatch(/read-only/);
+  });
+
+  it("passes an unrelated failure through as itself", () => {
+    const full = Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
+    expect(deniedMessage(full, "a.js", "/x/a.js")).toMatch(/no space left/);
+  });
+});
+
+// The message alone told the developer to pick the folder again; it could not
+// let them. Carrying the reason as a type is what lets the panel offer the
+// dialog that fixes it.
+describe("a refused write is marked as recoverable", () => {
+  it("is recoverable when the system refused access", () => {
+    const err = new AccessDenied("nope", { code: "EACCES" });
+    expect(err.recoverable).toBe(true);
+    expect(err.name).toBe("AccessDenied");
+  });
+
+  it("is not recoverable when the cause was something else", () => {
+    // picking a folder again does nothing for a full disk
+    expect(new AccessDenied("nope", { code: "ENOSPC" }).recoverable).toBe(false);
+    expect(new AccessDenied("nope").recoverable).toBe(false);
   });
 });

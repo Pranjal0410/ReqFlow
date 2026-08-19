@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { hasHost, writeThroughHost } from "./hostWriter";
 import vm from "vm";
 import { execFileSync } from "child_process";
 import { expandHome } from "./fileReader";
@@ -740,7 +741,64 @@ export const BACKUP_SUFFIX = ".reqflow.bak";
 // apply, which is the cheap half of the staleness problem. It does not catch a
 // file that was edited in place — for that the git warning and the backup are
 // what the developer has.
-export function applyPlan(plan: ApplyPlan): AppliedFile[] {
+// Why the write was refused, in terms of the thing that refused it.
+//
+// "EACCES: permission denied, open '/Users/.../routes/users.js'" is the whole
+// message a developer got, and none of it says what to do. On macOS the usual
+// cause is not file permissions at all: the folder is under Documents, Desktop
+// or Downloads, and the system withholds it from an app the user has not
+// granted access to. The fix is a system setting, or picking the folder through
+// the app's own dialog, which grants access as a side effect of choosing.
+// A refused write, marked as one.
+//
+// The message alone told the developer to pick the folder again; it could not
+// let them. Carrying the reason as a type rather than only as prose is what
+// lets the panel offer the dialog that fixes it, instead of asking them to go
+// and find it.
+export class AccessDenied extends Error {
+  readonly recoverable: boolean;
+  // the system's own word for what happened, carried alongside the sentence.
+  // Nobody should have to read it, but when a refusal is being argued about it
+  // is the only thing in this message that is not an interpretation.
+  readonly errno: string;
+
+  constructor(message: string, cause?: any) {
+    super(message);
+    this.name = "AccessDenied";
+    this.errno = String(cause?.code || "");
+    // only a real refusal is recoverable this way; anything else keeps its own
+    // shape and its own message
+    this.recoverable = cause?.code === "EACCES" || cause?.code === "EPERM";
+  }
+}
+
+export function deniedMessage(err: any, relPath: string, absPath: string): string {
+  const code = String(err?.code || "");
+  if (code !== "EACCES" && code !== "EPERM") {
+    return `${relPath} could not be written: ${String(err?.message || err)}`;
+  }
+
+  // Two different causes look identical from here, and naming only one sends
+  // half the people who hit this somewhere there is nothing to find. A file that
+  // is simply read-only is not a macOS privacy setting, and being told to go and
+  // grant Files and Folders access would waste the trip.
+  const protectedFolder = /\/(Documents|Desktop|Downloads)(\/|$)/.test(absPath);
+
+  return [
+    `${relPath} could not be written: the system refused access.`,
+    "Either the file or its folder is read-only,",
+    protectedFolder
+      ? "or macOS has not granted this app access to that folder — it is under Documents, Desktop or Downloads, which are withheld by default."
+      : "or this app does not have permission for that location.",
+    "Check the file's permissions first;",
+    protectedFolder
+      ? "if they are fine, use Scan Project to pick the folder again — choosing it in the dialog is what grants access — or allow ReqFlow under System Settings › Privacy & Security › Files and Folders."
+      : "if they are fine, use Scan Project to pick the folder again.",
+    "Nothing was written.",
+  ].join(" ");
+}
+
+export async function applyPlan(plan: ApplyPlan): Promise<AppliedFile[]> {
   const applied: AppliedFile[] = [];
 
   for (const file of plan.files) {
@@ -762,13 +820,38 @@ export function applyPlan(plan: ApplyPlan): AppliedFile[] {
     }
 
     let backup: string | null = null;
-    if (existsNow && plan.backups) {
-      backup = `${file.absPath}${BACKUP_SUFFIX}`;
-      fs.copyFileSync(file.absPath, backup);
-    }
+    try {
+      if (existsNow && plan.backups) {
+        backup = `${file.absPath}${BACKUP_SUFFIX}`;
+        fs.copyFileSync(file.absPath, backup);
+      }
 
-    fs.mkdirSync(path.dirname(file.absPath), { recursive: true });
-    fs.writeFileSync(file.absPath, file.nextContent, "utf-8");
+      fs.mkdirSync(path.dirname(file.absPath), { recursive: true });
+      fs.writeFileSync(file.absPath, file.nextContent, "utf-8");
+    } catch (err: any) {
+      const refused = err?.code === "EACCES" || err?.code === "EPERM";
+
+      // The desktop app can write where this process cannot: the folder dialog
+      // granted access to it, not to us. Tried only for a refusal, and only
+      // when there is a parent to ask — a full disk is not solved by asking
+      // somebody else to write the same bytes.
+      if (refused && hasHost()) {
+        try {
+          await writeThroughHost([{ path: file.absPath, content: file.nextContent }]);
+          applied.push({
+            relPath: file.relPath,
+            isNew: file.isNew,
+            addedLines: file.addedLines,
+            backup: backup ? path.basename(backup) : null,
+          });
+          continue;
+        } catch {
+          // fall through to the refusal the developer can act on
+        }
+      }
+
+      throw new AccessDenied(deniedMessage(err, file.relPath, file.absPath), err);
+    }
 
     applied.push({
       relPath: file.relPath,

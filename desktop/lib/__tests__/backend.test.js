@@ -1,5 +1,8 @@
 const http = require("http");
 const net = require("net");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const { inspectPort, Backend, PORT } = require("../backend");
 
 // These bind the real port, because what is being tested is a decision made
@@ -247,5 +250,64 @@ describe("Backend.start with something else on the port", () => {
     await backend.stop();
 
     expect(await inspectPort()).toBe("reqflow");
+  });
+});
+
+// On macOS the folder dialog grants access to this process, not to the child it
+// spawns — a signed app would pass that on, an ad-hoc signed one does not. So
+// the child asks the app to write, and the app can.
+describe("writing on the backend's behalf", () => {
+  const { EventEmitter } = require("events");
+
+  // the handler is attached to the child in _spawn; this exercises the same
+  // contract without starting a real backend
+  function hostFor(child) {
+    child.connected = true;
+    child.send = jest.fn();
+    child.on("message", (message) => {
+      if (!message || message.type !== "reqflow:write") return;
+      const reply = (ok, error) =>
+        child.send({ type: "reqflow:write-result", id: message.id, ok, error });
+      try {
+        for (const file of message.files || []) {
+          fs.mkdirSync(path.dirname(file.path), { recursive: true });
+          fs.writeFileSync(file.path, file.content, "utf-8");
+        }
+        reply(true);
+      } catch (err) {
+        reply(false, String(err?.message || err));
+      }
+    });
+    return child;
+  }
+
+  it("writes the file and says it did", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-host-"));
+    const target = path.join(dir, "nested", "users.js");
+    const child = hostFor(new EventEmitter());
+
+    child.emit("message", { type: "reqflow:write", id: 1, files: [{ path: target, content: "ok" }] });
+
+    expect(fs.readFileSync(target, "utf-8")).toBe("ok");
+    expect(child.send).toHaveBeenCalledWith({ type: "reqflow:write-result", id: 1, ok: true, error: undefined });
+  });
+
+  it("reports a failure rather than claiming it wrote", () => {
+    const child = hostFor(new EventEmitter());
+    child.emit("message", {
+      type: "reqflow:write",
+      id: 2,
+      files: [{ path: "/proc/nope/deeper/a.js", content: "x" }],
+    });
+
+    const [reply] = child.send.mock.calls[0];
+    expect(reply.ok).toBe(false);
+    expect(reply.error).toBeTruthy();
+  });
+
+  it("ignores a message that is not a write request", () => {
+    const child = hostFor(new EventEmitter());
+    child.emit("message", { type: "something-else" });
+    expect(child.send).not.toHaveBeenCalled();
   });
 });

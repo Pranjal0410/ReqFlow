@@ -219,6 +219,32 @@ class Backend {
     });
     this.child = child;
 
+    // Files the backend was not allowed to write itself.
+    //
+    // On macOS the folder dialog grants access to this process, not to the
+    // child it spawns — a signed app would pass that on, an ad-hoc signed one
+    // does not. So the child asks, and this writes. It is the same bytes to the
+    // same path either way; the only thing that changes is who the system
+    // believes is doing it.
+    child.on("message", (message) => {
+      if (!message || message.type !== "reqflow:write") return;
+
+      const reply = (ok, error) =>
+        child.connected && child.send({ type: "reqflow:write-result", id: message.id, ok, error });
+
+      try {
+        for (const file of message.files || []) {
+          // the child has already decided what to write and checked that it
+          // parses; this is the write and nothing else
+          fs.mkdirSync(path.dirname(file.path), { recursive: true });
+          fs.writeFileSync(file.path, file.content, "utf-8");
+        }
+        reply(true);
+      } catch (err) {
+        reply(false, String(err?.message || err));
+      }
+    });
+
     const record = (chunk) => {
       const text = String(chunk);
       this.output.push(text);

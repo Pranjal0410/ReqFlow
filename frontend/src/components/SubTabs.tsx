@@ -17,15 +17,26 @@ interface Props {
   headerCount: number;
   hasBody: boolean;
   pathPending: number;
+  captureCount: number;
 }
 
-export default function SubTabs({ activeSubTab, onSelect, headerCount, hasBody, pathPending }: Props) {
+export default function SubTabs({
+  activeSubTab,
+  onSelect,
+  headerCount,
+  hasBody,
+  pathPending,
+  captureCount,
+}: Props) {
   const tabs: TabInfo[] = [
     { key: "params", label: "Params", count: pathPending, hasDot: pathPending > 0 },
     { key: "headers", label: "Headers", count: headerCount },
     { key: "body", label: "Body", hasDot: hasBody },
     { key: "auth", label: "Auth" },
     { key: "tests", label: "Tests" },
+    // counted on the tab, because a rule that is feeding the rest of the
+    // workspace should not be something you have to open a panel to remember
+    { key: "capture", label: "Capture", count: captureCount },
   ];
 
   return (

@@ -57,6 +57,7 @@ import {
   defaultInstructions,
 } from "./src/lib/persist";
 import { Variable, toMap, substitute, workspaceAuth } from "./src/lib/variables";
+import { runCaptures, withResults } from "./src/lib/capture";
 import { withScheme, originOf } from "./src/lib/url";
 import {
   addGenerated,
@@ -148,6 +149,7 @@ function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
     loading: false,
     label: route ? `${route.method} ${route.path}` : "New Request",
     tests: [],
+    captures: [],
     pathParams: {},
   };
 }
@@ -543,6 +545,30 @@ export default function App() {
     [examples, activeTab.method, activeTab.url]
   );
 
+  // What a response hands to the requests after it.
+  //
+  // Both places a request goes out end up here, because a rule that only worked
+  // when you pressed Send by hand — and not under Run all, which is where a
+  // login followed by ten calls actually happens — would be the wrong half.
+  const applyCaptures = (tab: RequestTab, res: any): Record<string, string> => {
+    const found = runCaptures(tab.captures || [], res);
+    if (found.length === 0) return {};
+
+    setVariables((prev) => {
+      const next = [...prev];
+      for (const { name, value } of found) {
+        const at = next.findIndex((v) => v.key === name);
+        if (at >= 0) next[at] = { key: name, value };
+        else next.push({ key: name, value });
+      }
+      return next;
+    });
+
+    const asMap: Record<string, string> = {};
+    for (const { name, value } of found) asMap[name] = value;
+    return asMap;
+  };
+
   const updateActiveTab = (updates: Partial<RequestTab>) => {
     setTabs((prev) =>
       prev.map((t) => (t.id === activeTabId ? { ...t, ...updates } : t))
@@ -693,18 +719,39 @@ export default function App() {
 
         const res = await sendRequest(
           tab.method,
-          withScheme(applyPathParams(substitute(tab.url, vars), tab.pathParams || {})),
+          withScheme(applyPathParams(substitute(tab.url, vars), tab.pathParams || {}, vars)),
           headerObj,
           parsedBody
         );
         setTimings((prev) => recordTiming(prev, tab.method, tab.url, res));
         keepExample(tab.method, tab.url, tab.body, headerObj, res);
-      const tested = runAssertions(tab.tests, res);
+
+        // straight into the map this loop is resolving against, not only into
+        // state. The whole point of a run is that the login at the top of it
+        // gives the nine requests below it their token, and a setState landing
+        // after the loop has moved on would have given it to none of them.
+        const captured = applyCaptures(tab, res);
+        Object.assign(vars, captured);
+
+        const tested = runAssertions(tab.tests, res);
         tested.forEach((t) => (t.passed ? passed++ : failed++));
 
         sentCount++;
         setTabs((prev) =>
-          prev.map((t) => (t.id === tab.id ? { ...t, response: res, tests: tested, loading: false } : t))
+          prev.map((t) =>
+            t.id === tab.id
+              ? {
+                  ...t,
+                  response: res,
+                  tests: tested,
+                  loading: false,
+                  captures: withResults(
+                    t.captures || [],
+                    Object.entries(captured).map(([name, value]) => ({ name, value }))
+                  ),
+                }
+              : t
+          )
         );
       } catch {
         // a tab with an unparseable body or an unreachable host should not stop
@@ -1313,7 +1360,7 @@ export default function App() {
 
       const res = await sendRequest(
         activeTab.method,
-        withScheme(applyPathParams(substitute(activeTab.url, vars), activeTab.pathParams || {})),
+        withScheme(applyPathParams(substitute(activeTab.url, vars), activeTab.pathParams || {}, vars)),
         headerObj,
         parsedBody
       );
@@ -1328,10 +1375,13 @@ export default function App() {
 
       // assertions run on their own after every send. having to remember a
       // second button was the only way to ever see a result before.
+      const captured = applyCaptures(activeTab, res);
+
       updateActiveTab({
         response: res,
         loading: false,
         tests: runAssertions(activeTab.tests, res),
+        captures: withResults(activeTab.captures || [], Object.entries(captured).map(([name, value]) => ({ name, value }))),
       });
 
       setHistory((prev) =>
@@ -1428,6 +1478,8 @@ export default function App() {
             body={activeTab.body}
             headers={activeTab.headers}
             tests={activeTab.tests}
+            captures={activeTab.captures || []}
+            onCapturesChange={(captures) => updateActiveTab({ captures })}
             onMethodChange={(m) => updateActiveTab({ method: m, label: `${m} ${activeTab.url}` })}
             onUrlChange={(u) => updateActiveTab({ url: u })}
             onBodyChange={(b) => updateActiveTab({ body: b })}

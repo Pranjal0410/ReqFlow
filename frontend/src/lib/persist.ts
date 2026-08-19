@@ -128,6 +128,11 @@ function stripForStorage(tabs: RequestTab[]): { tabs: RequestTab[]; secrets: Sec
       loading: false,
       // and assertion outcomes belong to that response, not to the next one
       tests: tab.tests.map((t) => ({ ...t, passed: null })),
+      // the rule is worth keeping, the value it caught is not: half of these
+      // hold a token, and the variables store already decides what a credential
+      // may be written to. Keeping a copy here would put it back on disk beside
+      // the rule that fetched it.
+      captures: (tab.captures || []).map((c) => ({ ...c, lastValue: null })),
     };
   });
 

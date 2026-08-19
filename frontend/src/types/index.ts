@@ -43,6 +43,11 @@ export interface TestCase {
   passed: boolean | null;
 }
 
+// the rule lives with the code that runs it, the way Variable does; re-exported
+// here so a component can take it from the one place it takes its other types
+import type { Capture } from "../lib/capture";
+export type { Capture };
+
 export interface RequestTab {
   id: string;
   method: string;
@@ -53,6 +58,10 @@ export interface RequestTab {
   loading: boolean;
   label: string;
   tests: TestCase[];
+  // what this response gives to the ones after it: an id from a create, a token
+  // from a login. Optional because a workspace saved before this existed has
+  // none, and a tab with no rules is the normal case.
+  captures?: Capture[];
   // values for the :name placeholders in url. kept apart from the url so the
   // placeholder survives being filled in and can be changed again.
   pathParams: Record<string, string>;
@@ -63,7 +72,8 @@ export type SubTab =
   | "headers"
   | "body"
   | "auth"
-  | "tests";
+  | "tests"
+  | "capture";
 
 // Source for an endpoint the project does not have yet, written to match the
 // files it does have. Putting code into someone's repository is a different

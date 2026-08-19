@@ -17,8 +17,9 @@ import Icon from "./Icon";
 import SubTabs from "./SubTabs";
 import HeadersEditor from "./HeadersEditor";
 import TestRunner from "./TestRunner";
+import CaptureEditor from "./CaptureEditor";
 import ResponseViewer from "./ResponseViewer";
-import { SubTab, TestCase } from "../types";
+import { SubTab, TestCase, Capture } from "../types";
 import { paramsFromUrl, urlWithParams } from "../lib/queryParams";
 import { namesIn, unfilled } from "../lib/pathParams";
 import { placeholderFields } from "../lib/placeholders";
@@ -43,6 +44,8 @@ interface Props {
   onBodyChange: (b: string) => void;
   onHeadersChange: (h: HeaderRow[]) => void;
   onTestsChange: (tests: TestCase[]) => void;
+  captures: Capture[];
+  onCapturesChange: (captures: Capture[]) => void;
   onSend: () => void;
   // how many previous runs of this endpoint are on file. shown as a count
   // rather than a dot, because whether there is one to compare against or four
@@ -73,6 +76,8 @@ export default function RequestBuilder({
   onBodyChange,
   onHeadersChange,
   onTestsChange,
+  captures,
+  onCapturesChange,
   onSend,
   exampleCount,
   onOpenExamples,
@@ -164,6 +169,10 @@ export default function RequestBuilder({
       ...missingIn(url, variables),
       ...headers.filter((h) => h.enabled).flatMap((h) => missingIn(h.value, variables)),
       ...missingIn(body, variables),
+      // including the values filled in for :placeholders, which is where a
+      // captured id gets typed and where an unresolved name used to go out
+      // encoded rather than being reported
+      ...Object.values(pathParams || {}).flatMap((v) => missingIn(String(v || ""), variables)),
     ]),
   ];
   // sending /api/incidents/:id verbatim only ever produces a confusing 404, so
@@ -332,6 +341,7 @@ export default function RequestBuilder({
         headerCount={enabledHeaderCount}
         hasBody={body.trim().length > 0}
         pathPending={missingPath.length}
+        captureCount={(captures || []).length}
       />
 
       {/* sub tab content */}
@@ -440,6 +450,10 @@ export default function RequestBuilder({
 
         {activeSubTab === "tests" && (
           <TestRunner tests={tests} onChange={onTestsChange} response={response} />
+        )}
+
+        {activeSubTab === "capture" && (
+          <CaptureEditor captures={captures} onChange={onCapturesChange} response={response} />
         )}
       </View>
 

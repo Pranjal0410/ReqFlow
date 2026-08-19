@@ -252,6 +252,49 @@ function askAboutModel() {
 
 /* --------------------------------------------------------------- window */
 
+
+// Startup blocks on the keychain, and the keychain blocks the main thread.
+//
+// Reading the sealed key ends up in SecKeychainFindGenericPassword, which is
+// synchronous: it sends a mach message to the security server and does not
+// return until the user has answered the system's authorization prompt. A
+// sample of the main thread during a first launch is a single stack, 1499 of
+// 1499 samples deep in mach_msg2_trap under CSSM_DecryptDataFinal.
+//
+// Nothing else runs while that is happening — including the local server this
+// window loads its own content from. So the window is created, asks for its
+// page, and the answer never comes: ready-to-show never fires, and the app
+// shows nothing at all. Quitting and relaunching works because by then the
+// authorization has been given and the read returns at once. Two people
+// reported exactly that.
+//
+// Creating the window first was not enough. It has to have painted. Awaiting
+// this yields to the event loop, which is what lets the server answer, the
+// page load and the window appear — so when the keychain does block, there is
+// an app on screen behind the prompt rather than nothing.
+function windowOnScreen(win, ms = 15000) {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  if (win.isVisible()) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (shown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(shown);
+    };
+
+    // A window that fails to load must not hold the launch forever; the rest
+    // of startup is still worth running, and the failure shows in the window.
+    const timer = setTimeout(() => done(false), ms);
+
+    win.once("ready-to-show", () => done(true));
+    win.webContents.once("did-finish-load", () => done(true));
+    win.once("closed", () => done(false));
+  });
+}
+
 function createWindow(url) {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -266,6 +309,11 @@ function createWindow(url) {
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
+      // one method, defined in app-preload.js: open a folder dialog and return
+      // the path. Typing a path by hand is not what a desktop app should ask
+      // for, and on macOS choosing a folder in a real dialog is also what
+      // grants the app permission to write into it.
+      preload: path.join(__dirname, "app-preload.js"),
     },
   });
 
@@ -284,6 +332,17 @@ function createWindow(url) {
   mainWindow.loadURL(url);
   return mainWindow;
 }
+
+// The folder the developer wants to work on, chosen the way a desktop app
+// chooses one. Registered once, and it does nothing but ask and answer.
+ipcMain.handle("project:choose-folder", async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: "Choose a project folder",
+    properties: ["openDirectory", "createDirectory"],
+    buttonLabel: "Scan this folder",
+  });
+  return canceled || filePaths.length === 0 ? null : filePaths[0];
+});
 
 /* ------------------------------------------------------------- lifecycle */
 
@@ -333,6 +392,28 @@ async function boot() {
     app.quit();
     return;
   }
+
+  // The window comes first. Before the backend, and before anything that
+  // touches the keychain.
+  //
+  // It used to be last: the key was read, the backend was started, up to twenty
+  // seconds were spent waiting for it to answer, and only then did anything
+  // appear. Two people reported the app simply not opening and relaunched it.
+  //
+  // The waiting was only half of it. Reading the sealed key asks macOS for
+  // keychain access, and an ad-hoc signed app has no stable identity — so the
+  // system puts up its own authorization prompt, every new build, before this
+  // app has drawn a single pixel. A dialog with nothing behind it is
+  // indistinguishable from an app that has hung.
+  //
+  // The window is the app. Everything else is something it does once it exists.
+  staticServer = await startStaticServer(RESOURCES.frontendDir);
+  console.log(`[desktop] serving the app from ${staticServer.url}`);
+  createWindow(staticServer.url);
+
+  // and it is on screen before anything asks the keychain a question
+  const painted = await windowOnScreen(mainWindow);
+  if (!painted) console.log("[desktop] the window did not report itself ready; continuing");
 
   // an install from before the key was encrypted still has it in plain text,
   // and this is the launch that moves it
@@ -428,9 +509,6 @@ async function boot() {
     return;
   }
 
-  staticServer = await startStaticServer(RESOURCES.frontendDir);
-  console.log(`[desktop] serving the app from ${staticServer.url}`);
-  createWindow(staticServer.url);
   booting = false;
 }
 

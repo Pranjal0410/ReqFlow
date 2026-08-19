@@ -47,12 +47,15 @@ describe("looksLikeKey", () => {
 });
 
 describe("readApiKey", () => {
-  it("prefers the environment over anything on disk", () => {
+  // This asserted the opposite, and the assertion was the bug: a key exported in
+  // some shell weeks ago beat the one the user had just typed into the prompt,
+  // and the app then reported that key as invalid.
+  it("prefers what the user stored over the environment", () => {
     const userDataDir = tempDir();
     writeApiKey({ userDataDir }, "from-the-user-file-0000000");
     process.env[KEY_NAME] = "from-the-environment-0000";
 
-    expect(readApiKey({ userDataDir })).toBe("from-the-environment-0000");
+    expect(readApiKey({ userDataDir })).toBe("from-the-user-file-0000000");
   });
 
   // a developer with the repo already set up should never be asked for a key
@@ -215,5 +218,56 @@ describe("storing the key where the platform can keep it", () => {
       expect(sealExistingKey({ userDataDir, safeStorage: noKeychain })).toBeNull();
       expect(readApiKey({ userDataDir })).toBe("an-existing-key-000000000");
     });
+  });
+});
+
+// The environment used to win. It is inherited from whatever launched the app —
+// a shell profile, an old export — and it beat the key the user had just typed
+// into the prompt. The backend started with the stale one, Settings showed red,
+// and re-entering the same key fixed it, which made the app look random.
+describe("which key wins", () => {
+  let dir;
+  const before = process.env.GEMINI_API_KEY;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "reqflow-which-"));
+  });
+
+  afterEach(() => {
+    if (before === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = before;
+  });
+
+  it("prefers what the user stored in the app over the shell", () => {
+    fs.writeFileSync(path.join(dir, ".env"), "GEMINI_API_KEY=typed-into-the-app\n");
+    process.env.GEMINI_API_KEY = "stale-from-the-shell";
+
+    expect(readApiKey({ userDataDir: dir, repoEnvPath: null, safeStorage: null })).toBe(
+      "typed-into-the-app"
+    );
+  });
+
+  it("still uses the environment when nothing is stored", () => {
+    process.env.GEMINI_API_KEY = "from-the-shell";
+    expect(readApiKey({ userDataDir: dir, repoEnvPath: null, safeStorage: null })).toBe(
+      "from-the-shell"
+    );
+  });
+
+  it("prefers the sealed copy over the plain one", () => {
+    fs.writeFileSync(path.join(dir, ".env"), "GEMINI_API_KEY=plain\n");
+    const safeStorage = {
+      isEncryptionAvailable: () => true,
+      encryptString: (v) => Buffer.from(v),
+      decryptString: (b) => b.toString(),
+    };
+    fs.writeFileSync(path.join(dir, "gemini-key.enc"), Buffer.from("sealed"));
+
+    expect(readApiKey({ userDataDir: dir, repoEnvPath: null, safeStorage })).toBe("sealed");
+  });
+
+  it("has nothing to offer when there is nothing anywhere", () => {
+    delete process.env.GEMINI_API_KEY;
+    expect(readApiKey({ userDataDir: dir, repoEnvPath: null, safeStorage: null })).toBeNull();
   });
 });

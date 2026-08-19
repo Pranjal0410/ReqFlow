@@ -49,6 +49,14 @@ function sealedPath(userDataDir) {
   return path.join(userDataDir, SEALED_FILE);
 }
 
+// Every call here reaches the system keychain, and on macOS that call is
+// synchronous: it does not return until the user has answered whatever the
+// system decides to ask. Nothing else in the process runs in the meantime.
+//
+// So it is only ever asked when the answer is going to be used. Asking it in
+// order to discover that there was nothing to decrypt is a prompt the user has
+// to dismiss for no reason, in front of an app that has stopped responding
+// while it waits.
 function canSeal(safeStorage) {
   try {
     return !!safeStorage && safeStorage.isEncryptionAvailable();
@@ -58,6 +66,12 @@ function canSeal(safeStorage) {
 }
 
 function readSealed(userDataDir, safeStorage) {
+  // The file is checked first, deliberately. A fresh install has no sealed key,
+  // and asking the keychain about a file that is not there was enough to park
+  // the whole app on a first launch: the read blocked the main thread, the
+  // window it had just created never got its own content, and the app showed
+  // nothing until it was quit and reopened.
+  if (!fs.existsSync(sealedPath(userDataDir))) return null;
   if (!canSeal(safeStorage)) return null;
   try {
     const sealed = fs.readFileSync(sealedPath(userDataDir));
@@ -72,15 +86,27 @@ function readSealed(userDataDir, safeStorage) {
 
 // in order of how deliberate each one is: the environment beats the key the
 // app stored, which beats the repo's own
+// Where the key comes from, in the order of how deliberate each source is.
+//
+// The environment used to win. It is inherited from whatever launched the app —
+// a shell profile, an old export, a terminal opened weeks ago — and it beat the
+// key the user had just typed into the prompt. The app then asked no questions,
+// started the backend with the stale one, showed a red dot in Settings, and said
+// the key was invalid. Re-entering the same key in Settings fixed it, which made
+// the whole thing look random.
+//
+// So: what the user stored inside this app comes first, because storing it took
+// a deliberate act here. The environment stays as a way to run without storing
+// anything, which is what it is good for.
 function readApiKey({ userDataDir, repoEnvPath, safeStorage }) {
-  const fromEnv = process.env[KEY_NAME];
-  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
-
   const sealed = readSealed(userDataDir, safeStorage);
   if (sealed) return sealed;
 
   const fromUser = readEnvFile(userEnvPath(userDataDir))[KEY_NAME];
   if (fromUser) return fromUser;
+
+  const fromEnv = process.env[KEY_NAME];
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
 
   const fromRepo = repoEnvPath ? readEnvFile(repoEnvPath)[KEY_NAME] : undefined;
   return fromRepo || null;
@@ -91,11 +117,14 @@ function readApiKey({ userDataDir, repoEnvPath, safeStorage }) {
 // existing install stops holding a readable credential without the user having
 // to be asked for it again.
 function sealExistingKey({ userDataDir, safeStorage }) {
-  if (!canSeal(safeStorage)) return null;
-
+  // the plain key is looked for before the keychain is, for the same reason:
+  // there is nothing to seal on most launches, and finding that out should not
+  // cost a system prompt
   const file = userEnvPath(userDataDir);
   const plain = readEnvFile(file)[KEY_NAME];
   if (!plain) return null;
+
+  if (!canSeal(safeStorage)) return null;
 
   writeApiKey({ userDataDir, safeStorage }, plain);
 

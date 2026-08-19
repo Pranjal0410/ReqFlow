@@ -1,8 +1,9 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
 // Only the key prompt loads this. The app window itself is an ordinary web page
-// talking to localhost over http and is given no bridge at all, so nothing it
-// renders can reach the filesystem or the shell.
+// talking to localhost over http, and gets the separate, deliberately tiny
+// bridge in app-preload.js instead — one method, which opens a folder dialog and
+// returns the path the user picked.
 contextBridge.exposeInMainWorld("reqflow", {
   saveKey: (key) => ipcRenderer.invoke("api-key:save", key),
   openExternal: (url) => ipcRenderer.invoke("open-external", url),

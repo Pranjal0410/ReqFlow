@@ -32,6 +32,7 @@
     "files": [
       "main.js",
       "preload.js",
+      "app-preload.js",
       "key-prompt.html",
       "model-prompt.html",
       "lib/**/*",
@@ -59,7 +60,13 @@
         }
       ],
       "category": "public.app-category.developer-tools",
-      "icon": "resources/icon.png"
+      "icon": "resources/icon.png",
+      "extendInfo": {
+        "NSDocumentsFolderUsageDescription": "ReqFlow reads the project you point it at and writes the endpoints you approve back into it.",
+        "NSDesktopFolderUsageDescription": "ReqFlow reads the project you point it at and writes the endpoints you approve back into it.",
+        "NSDownloadsFolderUsageDescription": "ReqFlow reads the project you point it at and writes the endpoints you approve back into it.",
+        "NSRemovableVolumesUsageDescription": "ReqFlow reads the project you point it at and writes the endpoints you approve back into it."
+      }
     },
     "dmg": {
       "title": "ReqFlow"
@@ -97,5 +104,8 @@
       "<rootDir>/build/",
       "<rootDir>/staging/"
     ]
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

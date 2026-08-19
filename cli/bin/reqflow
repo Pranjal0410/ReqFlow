@@ -1,0 +1,18 @@
+#!/usr/bin/env node
+// tsx compiles on the way in, which keeps one copy of the logic: this runs the
+// app's own modules rather than a build of them that could fall behind.
+//
+// main() is called here rather than left to a require.main check inside the
+// module, because loaded through this launcher that check is never true and the
+// command exited zero having done nothing at all.
+require("tsx/cjs");
+const path = require("path");
+const { main } = require(path.join(__dirname, "..", "src", "index.ts"));
+
+main(process.argv.slice(2)).then(
+  (code) => process.exit(code),
+  (err) => {
+    console.error(err && err.message ? err.message : err);
+    process.exit(1);
+  }
+);

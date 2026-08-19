@@ -11,6 +11,23 @@ function getNestedValue(obj: any, path: string): any {
   return current;
 }
 
+// What a field name points at. Exported because a failing assertion has to be
+// able to say what it saw, and a second reading of "data.user.email" written
+// somewhere else would agree with this one right up until it did not.
+export function actualFor(response: ApiResponse, field: string): any {
+  return getNestedValue(
+    {
+      status: response.status,
+      statusText: response.statusText,
+      timing: response.timing.total,
+      ttfb: response.timing.ttfb,
+      size: response.size,
+      data: response.data,
+    },
+    field
+  );
+}
+
 // shared so the Tests panel and the automatic run after a request cannot
 // disagree about what passing means
 export function runAssertions(
@@ -19,17 +36,8 @@ export function runAssertions(
 ): TestCase[] {
   if (!response) return tests;
 
-  const target = {
-    status: response.status,
-    statusText: response.statusText,
-    timing: response.timing.total,
-    ttfb: response.timing.ttfb,
-    size: response.size,
-    data: response.data,
-  };
-
   return tests.map((test) => {
-    const actual = getNestedValue(target, test.field);
+    const actual = actualFor(response, test.field);
     let passed = false;
 
     switch (test.operator) {

@@ -76,19 +76,66 @@ login requests go out.
 
 ## Setup
 
+### What you need
+
+| | check it with |
+| --- | --- |
+| **Node 20 or newer** | `node -v` |
+| **A Gemini API key** | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — free tier |
+
+### Run it
+
 ```bash
 # backend
-cd backend && npm install
-cp .env.example .env          # add GEMINI_API_KEY
+cd backend
+npm install
+cp .env.example .env            # put your key in GEMINI_API_KEY
 npm run dev
 
 # frontend, in a second terminal
-cd frontend && npm install
+cd frontend
+npm install
 npx expo start --web
 ```
 
-The backend listens on 4000. Point **Base URL** at the server you want to
-exercise, then **Scan Project** at its folder.
+The backend listens on **4000** and the frontend on **8081**. Both have to be
+free; nothing here will pick another port for you.
+
+Then point **Base URL** at the server you want to exercise and press **Scan
+Project** at its folder.
+
+### If npm install stops on node-llama-cpp
+
+That is the optional local model, and it installs a native binary. Most machines
+get a prebuilt one and never notice. If yours has to build it instead, the
+install dies in node-gyp with an error that says nothing about ReqFlow, and you
+need:
+
+| | |
+| --- | --- |
+| **Python 3** | `python3 --version` |
+| **macOS** | `xcode-select --install` |
+| **Debian / Ubuntu** | `sudo apt install build-essential` |
+
+If it still complains about **expat** or another missing header:
+
+```bash
+# macOS
+brew install expat pkg-config
+
+# Debian / Ubuntu
+sudo apt install libexpat1-dev pkg-config
+```
+
+You can also skip it and use the hosted model:
+
+```bash
+cd backend && npm install --omit=optional
+```
+
+That is enough to run the app, but **not enough to package it** — `--omit=optional`
+also drops TypeScript's platform binary, and `npm run build` needs it. Do a full
+`npm install` before building the desktop app.
 
 ### As a desktop app
 
@@ -96,9 +143,27 @@ exercise, then **Scan Project** at its folder.
 cd desktop && npm install && npm run build
 ```
 
-Builds a DMG for macOS; `npm run build:win` and `build:linux` for the others. It
-asks for an API key on first launch and stores it encrypted through the OS
-keychain. `desktop/README.md` covers packaging and first-open on macOS.
+Packaging installs the backend fresh with its optional dependencies included,
+so a `--omit=optional` backend is not enough here — do a full `npm install` in
+`backend/` first, or `tsc` fails on a missing platform binary. If the build
+stops in node-gyp instead, that is `node-llama-cpp` with no prebuilt binary for
+your machine: install Python and a compiler as above.
+
+It stages the backend, exports the frontend and packages both. A few minutes the
+first time. Builds a DMG for macOS; `npm run build:win` and `build:linux` for the
+others. `desktop/README.md` covers packaging in more detail.
+
+The app serves its own window on **4179** and runs the backend on **4000**.
+
+On first launch it asks which engine to use and then for an API key, which it
+stores through the OS keychain. Two things to expect on macOS, both from the app
+being unsigned:
+
+- **Gatekeeper.** Opened from a download, macOS refuses it. Right-click the app
+  and choose **Open**, once.
+- **A keychain prompt**, asking to allow access to ReqFlow's stored key. Every
+  build is signed ad-hoc, so the system treats each one as a new app and asks
+  again. Allow it.
 
 ### Running the model on your machine
 

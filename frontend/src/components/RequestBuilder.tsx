@@ -25,6 +25,9 @@ import { namesIn, unfilled } from "../lib/pathParams";
 import { placeholderFields } from "../lib/placeholders";
 import { missingIn } from "../lib/variables";
 
+// what the Auth tab writes into the header: a reference, resolved on the way out
+const TOKEN_HEADER = "Bearer {{token}}";
+
 const METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
 interface HeaderRow {
@@ -63,6 +66,7 @@ interface Props {
   onSaveToken: (value: string) => void;
   savedToken?: string | null;
   variables: Record<string, string>;
+  onSetVariable: (name: string, value: string) => void;
 }
 
 export default function RequestBuilder({
@@ -91,6 +95,7 @@ export default function RequestBuilder({
   onSaveToken,
   savedToken,
   variables,
+  onSetVariable,
 }: Props) {
   const [showMethodPicker, setShowMethodPicker] = React.useState(false);
   const [activeSubTab, setActiveSubTab] = React.useState<SubTab>("body");
@@ -392,18 +397,33 @@ export default function RequestBuilder({
         {activeSubTab === "auth" && (
           <View style={styles.authSection}>
             <Text style={styles.authLabel}>Bearer Token</Text>
+            {/* The token is put in a variable and the header refers to it, so
+                what the tab holds is "Bearer {{token}}" rather than the
+                credential itself.
+
+                Writing the credential straight into the header looked simpler
+                and cost three things: it was stripped on restart, leaving an
+                Authorization header with nothing in it; every other tab needed
+                the same paste; and exporting the workspace had to redact it,
+                which produced a collection that authenticated with nothing. One
+                indirection fixes all three. */}
             <TextInput
               style={styles.urlInput}
               placeholder="paste JWT token here"
               placeholderTextColor={colors.textDim}
-              value={headers.find((h) => h.key === "Authorization")?.value.replace("Bearer ", "") || ""}
+              value={
+                headers.find((h) => h.key === "Authorization")?.value === TOKEN_HEADER
+                  ? variables.token || ""
+                  : headers.find((h) => h.key === "Authorization")?.value.replace("Bearer ", "") || ""
+              }
               onChangeText={(token) => {
+                onSetVariable("token", token);
                 const existing = headers.findIndex((h) => h.key === "Authorization");
                 const newHeaders = [...headers];
                 if (existing >= 0) {
-                  newHeaders[existing] = { key: "Authorization", value: `Bearer ${token}`, enabled: true };
+                  newHeaders[existing] = { key: "Authorization", value: TOKEN_HEADER, enabled: true };
                 } else {
-                  newHeaders.push({ key: "Authorization", value: `Bearer ${token}`, enabled: true });
+                  newHeaders.push({ key: "Authorization", value: TOKEN_HEADER, enabled: true });
                 }
                 onHeadersChange(newHeaders);
               }}

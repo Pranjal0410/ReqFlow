@@ -1520,6 +1520,7 @@ export default function App() {
             headers={activeTab.headers}
             tests={activeTab.tests}
             captures={activeTab.captures || []}
+            onSetVariable={handleAgentSetVariable}
             onCapturesChange={(captures) => updateActiveTab({ captures })}
             onMethodChange={(m) => updateActiveTab({ method: m, label: `${m} ${activeTab.url}` })}
             onUrlChange={(u) => updateActiveTab({ url: u })}

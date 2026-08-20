@@ -182,12 +182,12 @@ export default function RequestBuilder({
   ];
   // sending /api/incidents/:id verbatim only ever produces a confusing 404, so
   // say what is missing instead of letting it go
+  // Named and never filled in. Worth saying, not worth refusing over: the row
+  // is usually one the app left behind itself after taking a credential out of
+  // it, and the first thing blocking on it did was stop the login — the one
+  // request in the workspace that needs no Authorization at all.
   const emptyHeaders = unfilledHeaders(headers);
-  const canSend =
-    url.trim().length > 0 &&
-    missingPath.length === 0 &&
-    missingVars.length === 0 &&
-    emptyHeaders.length === 0;
+  const canSend = url.trim().length > 0 && missingPath.length === 0 && missingVars.length === 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
   const ok = response && response.status >= 200 && response.status < 400;
@@ -287,9 +287,15 @@ export default function RequestBuilder({
             ? `Fill ${missingPath.map((n) => ":" + n).join(", ")} under Params before sending`
             : missingVars.length
             ? `${missingVars.map((n) => "{{" + n + "}}").join(", ")} has no value. Variables are cleared when the browser closes, so log in again to refill it.`
-            : emptyHeaders.length
-            ? `${emptyHeaders.join(", ")} has no value. Fill it under Headers, or switch the row off.`
             : "Enter a URL to send"}
+        </Text>
+      )}
+
+      {canSend && emptyHeaders.length > 0 && (
+        <Text style={styles.blocked}>
+          {emptyHeaders.join(", ")} {emptyHeaders.length === 1 ? "has" : "have"} no value, so
+          {emptyHeaders.length === 1 ? " it is" : " they are"} being sent empty. Fill
+          {emptyHeaders.length === 1 ? " it" : " them"} under Headers, or switch the row off.
         </Text>
       )}
 

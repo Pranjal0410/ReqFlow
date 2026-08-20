@@ -139,3 +139,31 @@ describe("workspaceAuth", () => {
     expect(workspaceAuth([], vars)).toBeNull();
   });
 });
+
+// The Auth field takes whatever was on the clipboard, and that is often the
+// whole header rather than the token in it. These are the shapes it has to
+// survive, checked here because the field's own handler is in a component the
+// test runner will not load.
+describe("what counts as the token when a header was pasted", () => {
+  const asToken = (pasted: string) =>
+    pasted
+      .trim()
+      .replace(/^Bearer\s+/i, "")
+      .replace(/\{\{\s*token\s*\}\}/gi, "")
+      .trim();
+
+  it("takes the token out of a pasted header", () => {
+    expect(asToken("Bearer eyJhbGciOi")).toBe("eyJhbGciOi");
+    expect(asToken("bearer eyJhbGciOi")).toBe("eyJhbGciOi");
+  });
+
+  // this one sent "Bearer Bearer {{token}}" and the server called it invalid
+  it("refuses to store a reference as the thing it refers to", () => {
+    expect(asToken("Bearer {{token}}")).toBe("");
+    expect(asToken("{{token}}")).toBe("");
+  });
+
+  it("leaves a plain token alone", () => {
+    expect(asToken("  eyJhbGciOi  ")).toBe("eyJhbGciOi");
+  });
+});

@@ -416,7 +416,18 @@ export default function RequestBuilder({
                   ? variables.token || ""
                   : headers.find((h) => h.key === "Authorization")?.value.replace("Bearer ", "") || ""
               }
-              onChangeText={(token) => {
+              onChangeText={(pasted) => {
+                // What lands here is whatever was on the clipboard, and that is
+                // often the whole header — "Bearer eyJhb…" — or, once the field
+                // started showing a reference, the reference itself. Storing
+                // either verbatim makes {{token}} expand to something that is
+                // not a token, and the request comes back "Invalid token"
+                // pointing at a header that looks perfectly correct.
+                const token = pasted
+                  .trim()
+                  .replace(/^Bearer\s+/i, "")
+                  .replace(/\{\{\s*token\s*\}\}/gi, "")
+                  .trim();
                 onSetVariable("token", token);
                 const existing = headers.findIndex((h) => h.key === "Authorization");
                 const newHeaders = [...headers];

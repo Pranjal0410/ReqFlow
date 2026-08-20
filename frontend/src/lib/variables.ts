@@ -31,6 +31,27 @@ export function isSecretHeader(name: string): boolean {
   return SECRET_HEADER.test(name.trim()) || SECRET_HINT.test(name.trim());
 }
 
+const REFERENCES_A_VARIABLE = /\{\{\s*[A-Za-z0-9_.-]+\s*\}\}/;
+
+// Whether a header's value is the credential itself, and so must be kept out of
+// anything written down.
+//
+// "Bearer {{token}}" is not. It is a reference, and the value behind it is
+// looked after separately, where it lives. Treating the two the same emptied
+// the header on every restart — the row came back with nothing in it, the
+// request went out unauthenticated, and the server said "No token provided"
+// about a tab that looked correctly set up.
+//
+// This lives here rather than in persist.ts because persist.ts pulls in
+// react-native and the storage adapter, and the runner will not load either —
+// which is how this went uncovered long enough to be got wrong twice.
+export function holdsACredential(key: string, value: string): boolean {
+  if (!key || !key.trim()) return false;
+  if (!value) return false;
+  if (!isSecretHeader(key)) return false;
+  return !REFERENCES_A_VARIABLE.test(value);
+}
+
 export function toMap(vars: Variable[]): Record<string, string> {
   const map: Record<string, string> = {};
   for (const v of vars) {

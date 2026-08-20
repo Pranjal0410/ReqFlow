@@ -1,4 +1,4 @@
-import { findToken, isSecretVariable, missingIn, substitute, toMap, workspaceAuth} from "../variables";
+import { findToken, isSecretVariable, missingIn, substitute, toMap, workspaceAuth, holdsACredential } from "../variables";
 
 const vars = toMap([
   { key: "token", value: "abc123" },
@@ -165,5 +165,30 @@ describe("what counts as the token when a header was pasted", () => {
 
   it("leaves a plain token alone", () => {
     expect(asToken("  eyJhbGciOi  ")).toBe("eyJhbGciOi");
+  });
+});
+
+
+// This decided what gets written to disk, and it lived in a module the runner
+// will not load — so nothing checked it until a restart started emptying the
+// Authorization header of every tab.
+describe("telling a credential from a reference to one", () => {
+  it("calls a real token a credential", () => {
+    expect(holdsACredential("Authorization", "Bearer eyJhbGciOi")).toBe(true);
+    expect(holdsACredential("Cookie", "session=abc")).toBe(true);
+    expect(holdsACredential("X-Api-Key", "live-abc")).toBe(true);
+  });
+
+  // the one that went wrong: stripped on every save, so the header came back
+  // empty and the request went out with no authentication at all
+  it("does not call a reference one", () => {
+    expect(holdsACredential("Authorization", "Bearer {{token}}")).toBe(false);
+    expect(holdsACredential("X-Api-Key", "{{apiKey}}")).toBe(false);
+  });
+
+  it("has nothing to protect in an ordinary header or an empty one", () => {
+    expect(holdsACredential("Content-Type", "application/json")).toBe(false);
+    expect(holdsACredential("Authorization", "")).toBe(false);
+    expect(holdsACredential("", "anything")).toBe(false);
   });
 });

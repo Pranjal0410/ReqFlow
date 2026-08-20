@@ -19,7 +19,7 @@ import { ExampleStore, ExampleLimit, coerceLimit } from "./examples";
 const KEY = "reqflow.workspace.v1";
 const SECRETS_KEY = "reqflow.secrets.v1";
 
-import { isSecretHeader } from "./variables";
+import { isSecretHeader, holdsACredential } from "./variables";
 // re-exported so the callers that already take it from here keep working
 export { isSecretHeader };
 
@@ -105,7 +105,7 @@ function stripForStorage(tabs: RequestTab[]): { tabs: RequestTab[]; secrets: Sec
 
   const cleaned = tabs.map((tab) => {
     const headers = tab.headers.map((h) => {
-      if (h.key.trim() && isSecretHeader(h.key) && h.value) {
+      if (holdsACredential(h.key, h.value)) {
         secrets[tab.id] = { ...(secrets[tab.id] || {}), [h.key]: h.value };
         // the row stays so you can see the header existed
         return { ...h, value: "" };

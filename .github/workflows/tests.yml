@@ -17,6 +17,11 @@ jobs:
   suite:
     runs-on: ubuntu-latest
 
+    # A suite that hangs should fail and show its output, not sit there for six
+    # hours. The first run of this workflow did the second thing, and the only
+    # way to find out where it had stopped was to cancel it and read the log.
+    timeout-minutes: 15
+
     strategy:
       # one package failing should not hide whether the others pass, which is
       # the whole reason to know about a break early

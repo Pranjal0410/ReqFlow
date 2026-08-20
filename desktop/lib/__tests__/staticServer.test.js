@@ -40,9 +40,33 @@ describe("the origin the app is served from", () => {
     const second = await startStaticServer(dir);
     opened.push(second);
 
-    expect(second.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    expect(second.url).toMatch(/^http:\/\/localhost:\d+$/);
     // and it says so, because otherwise it looks like the app forgot everything
     expect(second.url).not.toBe(first.url);
+  });
+
+  // the url says localhost, and localhost is two addresses. Both have to
+  // answer, or the app opens to nothing on whichever machine prefers the other.
+  it("answers on both addresses the name resolves to", async () => {
+    const server = await startStaticServer(dir);
+    opened.push(server);
+    const port = new URL(server.url).port;
+
+    const at = (host) =>
+      new Promise((resolve) => {
+        require("http")
+          .get({ host, port, path: "/index.html" }, (res) => {
+            let text = "";
+            res.on("data", (c) => (text += c));
+            res.on("end", () => resolve(text));
+          })
+          .on("error", () => resolve(null));
+      });
+
+    expect(await at("127.0.0.1")).toContain("hi");
+    const six = await at("::1");
+    // a machine with IPv6 off has nothing to bind, and that is allowed
+    if (six !== null) expect(six).toContain("hi");
   });
 
   it("serves the export it was pointed at", async () => {

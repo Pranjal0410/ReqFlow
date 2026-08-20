@@ -100,6 +100,30 @@ function startStaticServer(root) {
   });
 }
 
+// Both loopback addresses, under the one name.
+//
+// The url says localhost because the origin has to stay what it has always
+// been — it is the key the workspace is filed under, and changing it empties
+// the app of everything it saved. But localhost is a name with two addresses,
+// and binding only 127.0.0.1 while calling itself localhost is a promise this
+// cannot keep on a machine that resolves ::1 first: the window asks for its own
+// content and nothing answers. So it answers on both, and the name stays true.
+//
+// The second one is best effort. A machine with IPv6 turned off has no ::1 to
+// bind, and that is not a reason to fail a launch — 127.0.0.1 is where the
+// answer was coming from anyway.
+function alsoOnIPv6(handler, port) {
+  return new Promise((resolve) => {
+    const six = http.createServer(handler);
+    six.once("error", () => resolve(null));
+    try {
+      six.listen(port, "::1", () => resolve(six));
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 function listenOn(server, port) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -107,24 +131,25 @@ function listenOn(server, port) {
       reject(err);
     };
     server.once("error", onError);
-    server.listen(port, "127.0.0.1", () => {
+    server.listen(port, "127.0.0.1", async () => {
       server.removeListener("error", onError);
+      const actual = server.address().port;
+      const six = await alsoOnIPv6(server.listeners("request")[0], actual);
+
       resolve({
-        // The address it is actually on, not a name that usually resolves to
-        // it. This bound to 127.0.0.1 and then called itself localhost, which
-        // are the same thing right up until they are not: a machine whose
-        // localhost resolves to ::1 first has nothing listening there, and the
-        // window asks for its own content and never gets an answer. It cost a
-        // CI job that hung rather than failed, and it is the same shape as an
-        // app that opens to nothing.
-        url: `http://127.0.0.1:${server.address().port}`,
+        url: `http://localhost:${actual}`,
         // the app is quitting: a browser tab holding a keep-alive socket must
         // not decide how long that takes
         close: () =>
-          new Promise((done) => {
-            server.closeAllConnections?.();
-            server.close(done);
-          }),
+          Promise.all(
+            [server, six].filter(Boolean).map(
+              (s) =>
+                new Promise((done) => {
+                  s.closeAllConnections?.();
+                  s.close(done);
+                })
+            )
+          ).then(() => undefined),
       });
     });
   });

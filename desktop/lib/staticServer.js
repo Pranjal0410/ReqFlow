@@ -110,7 +110,14 @@ function listenOn(server, port) {
     server.listen(port, "127.0.0.1", () => {
       server.removeListener("error", onError);
       resolve({
-        url: `http://localhost:${server.address().port}`,
+        // The address it is actually on, not a name that usually resolves to
+        // it. This bound to 127.0.0.1 and then called itself localhost, which
+        // are the same thing right up until they are not: a machine whose
+        // localhost resolves to ::1 first has nothing listening there, and the
+        // window asks for its own content and never gets an answer. It cost a
+        // CI job that hung rather than failed, and it is the same shape as an
+        // app that opens to nothing.
+        url: `http://127.0.0.1:${server.address().port}`,
         // the app is quitting: a browser tab holding a keep-alive socket must
         // not decide how long that takes
         close: () =>

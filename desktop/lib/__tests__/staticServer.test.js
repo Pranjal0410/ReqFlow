@@ -40,7 +40,7 @@ describe("the origin the app is served from", () => {
     const second = await startStaticServer(dir);
     opened.push(second);
 
-    expect(second.url).toMatch(/^http:\/\/localhost:\d+$/);
+    expect(second.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
     // and it says so, because otherwise it looks like the app forgot everything
     expect(second.url).not.toBe(first.url);
   });

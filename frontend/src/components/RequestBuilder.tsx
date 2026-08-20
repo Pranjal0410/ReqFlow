@@ -23,7 +23,7 @@ import { SubTab, TestCase, Capture } from "../types";
 import { paramsFromUrl, urlWithParams } from "../lib/queryParams";
 import { namesIn, unfilled } from "../lib/pathParams";
 import { placeholderFields } from "../lib/placeholders";
-import { missingIn } from "../lib/variables";
+import { missingIn, unfilledHeaders } from "../lib/variables";
 
 // what the Auth tab writes into the header: a reference, resolved on the way out
 const TOKEN_HEADER = "Bearer {{token}}";
@@ -182,7 +182,12 @@ export default function RequestBuilder({
   ];
   // sending /api/incidents/:id verbatim only ever produces a confusing 404, so
   // say what is missing instead of letting it go
-  const canSend = url.trim().length > 0 && missingPath.length === 0 && missingVars.length === 0;
+  const emptyHeaders = unfilledHeaders(headers);
+  const canSend =
+    url.trim().length > 0 &&
+    missingPath.length === 0 &&
+    missingVars.length === 0 &&
+    emptyHeaders.length === 0;
   const enabledHeaderCount = headers.filter((h) => h.enabled && h.key.trim()).length;
   const methodColor = (colors.method as any)[method] || colors.text;
   const ok = response && response.status >= 200 && response.status < 400;
@@ -282,6 +287,8 @@ export default function RequestBuilder({
             ? `Fill ${missingPath.map((n) => ":" + n).join(", ")} under Params before sending`
             : missingVars.length
             ? `${missingVars.map((n) => "{{" + n + "}}").join(", ")} has no value. Variables are cleared when the browser closes, so log in again to refill it.`
+            : emptyHeaders.length
+            ? `${emptyHeaders.join(", ")} has no value. Fill it under Headers, or switch the row off.`
             : "Enter a URL to send"}
         </Text>
       )}

@@ -1,4 +1,4 @@
-import { findToken, isSecretVariable, missingIn, substitute, toMap, workspaceAuth, holdsACredential } from "../variables";
+import { findToken, isSecretVariable, missingIn, substitute, toMap, workspaceAuth, holdsACredential, unfilledHeaders } from "../variables";
 
 const vars = toMap([
   { key: "token", value: "abc123" },
@@ -190,5 +190,39 @@ describe("telling a credential from a reference to one", () => {
     expect(holdsACredential("Content-Type", "application/json")).toBe(false);
     expect(holdsACredential("Authorization", "")).toBe(false);
     expect(holdsACredential("", "anything")).toBe(false);
+  });
+});
+
+
+describe("headers that were named and never filled in", () => {
+  const h = (key: string, value: string, enabled = true) => ({ key, value, enabled });
+
+  // the one that cost an afternoon: the row looked exactly as it always had
+  it("names an enabled header with nothing in it", () => {
+    expect(unfilledHeaders([h("Authorization", "")])).toEqual(["Authorization"]);
+    expect(unfilledHeaders([h("Authorization", "   ")])).toEqual(["Authorization"]);
+  });
+
+  it("says nothing about one that is filled in", () => {
+    expect(unfilledHeaders([h("Authorization", "Bearer {{token}}")])).toEqual([]);
+    expect(unfilledHeaders([h("Content-Type", "application/json")])).toEqual([]);
+  });
+
+  // switching a row off is how you say you did not mean to send it
+  it("leaves a row that was switched off alone", () => {
+    expect(unfilledHeaders([h("Authorization", "", false)])).toEqual([]);
+  });
+
+  it("ignores a row with no name, which is just an empty row", () => {
+    expect(unfilledHeaders([h("", "")])).toEqual([]);
+    expect(unfilledHeaders([h("  ", "value")])).toEqual([]);
+  });
+
+  it("names each one once, however many rows repeat it", () => {
+    expect(unfilledHeaders([h("X-Trace", ""), h("X-Trace", "")])).toEqual(["X-Trace"]);
+  });
+
+  it("has nothing to say about no headers at all", () => {
+    expect(unfilledHeaders([])).toEqual([]);
   });
 });

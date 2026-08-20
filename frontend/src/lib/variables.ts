@@ -45,6 +45,30 @@ const REFERENCES_A_VARIABLE = /\{\{\s*[A-Za-z0-9_.-]+\s*\}\}/;
 // This lives here rather than in persist.ts because persist.ts pulls in
 // react-native and the storage adapter, and the runner will not load either —
 // which is how this went uncovered long enough to be got wrong twice.
+// Headers that were named and never filled in.
+//
+// An enabled header with a name and no value is not a request anyone meant to
+// send: "Authorization: " is the same as no Authorization at all, and the
+// server answers 401 about a tab that looks correctly set up. This one cost an
+// afternoon — the value had been stripped on a restart, the row survived
+// looking exactly as it always had, and nothing anywhere said the header was
+// empty. The app already refuses to send an unfilled :placeholder for the same
+// reason, and says which one.
+export function unfilledHeaders(
+  headers: { key: string; value: string; enabled: boolean }[]
+): string[] {
+  const out: string[] = [];
+  for (const h of headers || []) {
+    // one the user switched off is one they decided not to send
+    if (h.enabled === false) continue;
+    if (!String(h.key || "").trim()) continue;
+    if (String(h.value || "").trim()) continue;
+    const name = String(h.key).trim();
+    if (!out.includes(name)) out.push(name);
+  }
+  return out;
+}
+
 export function holdsACredential(key: string, value: string): boolean {
   if (!key || !key.trim()) return false;
   if (!value) return false;

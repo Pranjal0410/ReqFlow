@@ -37,8 +37,10 @@ describe("writing the workspace out", () => {
     });
   });
 
-  // the file exists to be committed, so this is the one thing it must never do
-  it("writes a credential header out empty, keeping the row", () => {
+  // the file exists to be committed, so the credential must never be in it —
+  // but emptying the header left three requests authenticating with nothing,
+  // so the shape stays and the name says what to supply
+  it("keeps the scheme of a credential header and names what it needs", () => {
     const c = toCollection(
       [tab({ headers: [{ key: "Authorization", value: "Bearer real-token", enabled: true }] })],
       [],
@@ -46,8 +48,9 @@ describe("writing the workspace out", () => {
       "x"
     );
     expect(c.requests[0].headers).toEqual([
-      { key: "Authorization", value: "", enabled: true },
+      { key: "Authorization", value: "Bearer {{token}}", enabled: true },
     ]);
+    expect(c.variables).toContainEqual({ key: "token", value: "" });
   });
 
   // emptying this one too left a collection that could not authenticate, which
@@ -183,13 +186,36 @@ describe("reading one back", () => {
 
 
 describe("deciding what a file may carry", () => {
-  it("keeps a reference and drops the thing itself", () => {
-    expect(headerForFile("Authorization", "Bearer {{token}}")).toBe("Bearer {{token}}");
-    expect(headerForFile("Authorization", "Bearer eyJhbGciOi")).toBe("");
+  it("keeps a reference as written", () => {
+    expect(headerForFile("Authorization", "Bearer {{token}}")).toEqual({
+      value: "Bearer {{token}}",
+      needs: [],
+    });
+  });
+
+  it("turns a real credential into the shape of one", () => {
+    expect(headerForFile("Authorization", "Bearer eyJhbGciOi")).toEqual({
+      value: "Bearer {{token}}",
+      needs: ["token"],
+    });
+  });
+
+  it("names any other credential header after itself", () => {
+    expect(headerForFile("X-Api-Key", "live-abc")).toEqual({
+      value: "{{X-Api-Key}}",
+      needs: ["X-Api-Key"],
+    });
+  });
+
+  it("has nothing to replace in an empty one", () => {
+    expect(headerForFile("Authorization", "")).toEqual({ value: "", needs: [] });
   });
 
   it("leaves an ordinary header alone whatever it says", () => {
-    expect(headerForFile("Content-Type", "application/json")).toBe("application/json");
+    expect(headerForFile("Content-Type", "application/json")).toEqual({
+      value: "application/json",
+      needs: [],
+    });
   });
 
   it("names what it took out of a body so a runner can supply it", () => {

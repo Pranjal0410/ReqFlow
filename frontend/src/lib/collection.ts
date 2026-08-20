@@ -55,10 +55,35 @@ const REFERENCES_A_VARIABLE = /\{\{\s*[A-Za-z0-9_.-]+\s*\}\}/;
 // collection whose Authorization header is blank is one that cannot be run,
 // which is the entire reason the file exists. Written out, the request stayed
 // but the way it authenticated did not.
-export function headerForFile(key: string, value: string): string {
+//
+// Emptying a real one had the same effect for a different reason. The Auth tab
+// writes the token it is given straight into the header, as "Bearer eyJhb…",
+// so a workspace built that way exported three requests that authenticated with
+// nothing. A credential still cannot go in the file — but the shape of it can,
+// and the name says what has to be supplied. Same treatment the password in a
+// login body gets, for the same reason.
+export function headerForFile(key: string, value: string): { value: string; needs: string[] } {
   const text = value || "";
-  if (!isSecretHeader(key)) return text;
-  return REFERENCES_A_VARIABLE.test(text) ? text : "";
+  if (!isSecretHeader(key) || REFERENCES_A_VARIABLE.test(text)) return { value: text, needs: [] };
+  if (!text.trim()) return { value: "", needs: [] };
+
+  const name = nameForHeader(key);
+
+  // "Bearer abc" keeps its scheme: the scheme is how the request is built, not
+  // the secret, and losing it means whoever fills this in has to know to put it
+  // back.
+  const scheme = text.match(/^([A-Za-z][A-Za-z0-9-]*)\s+\S/);
+  return scheme
+    ? { value: `${scheme[1]} {{${name}}}`, needs: [name] }
+    : { value: `{{${name}}}`, needs: [name] };
+}
+
+// Authorization is the one everybody already calls token; anything else is
+// named after the header it came from, so the row and the name match.
+function nameForHeader(key: string): string {
+  const trimmed = String(key || "").trim();
+  if (/^authorization$/i.test(trimmed)) return "token";
+  return trimmed.replace(/[^A-Za-z0-9_.-]/g, "") || "value";
 }
 
 // A login body carries in plain text the password that redacting the
@@ -126,11 +151,11 @@ export function toCollection(
       url: tab.url,
       headers: (tab.headers || [])
         .filter((h) => h.key && h.key.trim())
-        .map((h) => ({
-          key: h.key,
-          value: headerForFile(h.key, h.value || ""),
-          enabled: h.enabled !== false,
-        })),
+        .map((h) => {
+          const header = headerForFile(h.key, h.value || "");
+          for (const n of header.needs) if (!needed.includes(n)) needed.push(n);
+          return { key: h.key, value: header.value, enabled: h.enabled !== false };
+        }),
       body,
       pathParams: tab.pathParams || {},
       // an outcome belongs to the response that produced it, and there is no

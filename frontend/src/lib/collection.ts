@@ -288,6 +288,44 @@ export function fromCollection(raw: any): Imported | null {
   };
 }
 
+// Merging a loaded collection into what is already open.
+//
+// The first version appended, which meant loading a collection you had just
+// saved gave you two of every tab. Every other way into a tab in this app finds
+// the one for that endpoint and uses it — that is the whole of the tab work —
+// and reading a file should not be the exception.
+//
+// So a request that matches an open tab replaces its contents: the url, what it
+// sends, what it asserts, what it takes out of the response. A request with no
+// tab open is added. A tab with no request in the file is left exactly as it is,
+// because a file is a saved subset of a workspace and not a claim about the
+// rest of it.
+export function mergeIntoTabs(open: RequestTab[], loaded: RequestTab[]): RequestTab[] {
+  const key = (t: { method: string; url: string }) => `${t.method} ${t.url}`;
+  const next = [...(open || [])];
+
+  for (const tab of loaded || []) {
+    const at = next.findIndex((t) => key(t) === key(tab));
+    if (at >= 0) {
+      // its id and its response stay: the id is what the active tab is tracked
+      // by, and the response belongs to a request that was actually sent
+      next[at] = {
+        ...next[at],
+        body: tab.body,
+        headers: tab.headers,
+        tests: tab.tests,
+        captures: tab.captures,
+        pathParams: tab.pathParams,
+        label: tab.label,
+      };
+    } else {
+      next.push(tab);
+    }
+  }
+
+  return next;
+}
+
 // The name the file is given when the app writes it. Beside the code, not in a
 // downloads folder: the requests belong to the project the same way its tests
 // do, and the runner looks here first.

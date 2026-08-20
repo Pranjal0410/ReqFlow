@@ -60,7 +60,7 @@ import {
 } from "./src/lib/persist";
 import { Variable, toMap, substitute, workspaceAuth } from "./src/lib/variables";
 import { runCaptures, withResults } from "./src/lib/capture";
-import { toCollection, fromCollection, FILENAME } from "./src/lib/collection";
+import { toCollection, fromCollection, mergeIntoTabs, FILENAME } from "./src/lib/collection";
 import { withScheme, originOf } from "./src/lib/url";
 import {
   addGenerated,
@@ -1461,11 +1461,15 @@ export default function App() {
                   const read = fromCollection(collection);
                   if (!read) return "nothing to load";
 
-                  // opened alongside what is already there rather than
-                  // replacing it: a load that quietly discarded the tabs
-                  // someone had open would be the last thing they wanted.
-                  setTabs((prev) => [...prev, ...read.tabs]);
-                  setActiveTabId(read.tabs[0].id);
+                  // a request already open is that tab, brought up to date;
+                  // one that is not becomes a new tab; anything open that the
+                  // file says nothing about is left alone
+                  const merged = mergeIntoTabs(tabsRef.current, read.tabs);
+                  setTabs(merged);
+                  const first = merged.find(
+                    (t) => t.method === read.tabs[0].method && t.url === read.tabs[0].url
+                  );
+                  if (first) setActiveTabId(first.id);
                   if (read.baseUrl) setBaseUrl(read.baseUrl);
                   setVariables((prev) => {
                     const next = [...prev];

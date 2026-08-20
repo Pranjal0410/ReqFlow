@@ -1,4 +1,5 @@
 import {
+  mergeIntoTabs,
   toCollection,
   fromCollection,
   serialise,
@@ -237,5 +238,54 @@ describe("deciding what a file may carry", () => {
 
   it("has nothing to do to an empty body", () => {
     expect(bodyForFile("")).toEqual({ body: "", needs: [] });
+  });
+});
+
+
+describe("loading a collection into a workspace that is already open", () => {
+  const open = tab({
+    id: "already-open",
+    tests: [],
+    captures: [],
+    response: { status: 200 } as any,
+  });
+
+  // loading a collection you had just saved used to give you two of every tab
+  it("brings a matching tab up to date instead of adding a second one", () => {
+    const loaded = tab({
+      id: "from-file",
+      tests: [{ id: "t", field: "status", operator: "equals", value: "200", passed: null }],
+    });
+
+    const merged = mergeIntoTabs([open], [loaded]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].tests).toHaveLength(1);
+  });
+
+  it("keeps the open tab's id, because that is what the active tab is tracked by", () => {
+    const merged = mergeIntoTabs([open], [tab({ id: "from-file" })]);
+    expect(merged[0].id).toBe("already-open");
+  });
+
+  // the response belongs to a request that was actually sent
+  it("does not clear a response the tab already has", () => {
+    const merged = mergeIntoTabs([open], [tab({ id: "from-file", response: null })]);
+    expect(merged[0].response).toEqual({ status: 200 });
+  });
+
+  it("adds a request that has no tab open", () => {
+    const merged = mergeIntoTabs([open], [tab({ id: "other", url: "http://localhost:3001/api/other" })]);
+    expect(merged).toHaveLength(2);
+  });
+
+  // a file is a saved subset of a workspace, not a claim about the rest of it
+  it("leaves an open tab the file says nothing about alone", () => {
+    const untouched = tab({ id: "mine", url: "http://localhost:3001/api/mine" });
+    expect(mergeIntoTabs([untouched], []).map((t) => t.id)).toEqual(["mine"]);
+  });
+
+  it("tells a GET from a POST at the same url", () => {
+    const merged = mergeIntoTabs([open], [tab({ id: "post", method: "POST" })]);
+    expect(merged).toHaveLength(2);
   });
 });

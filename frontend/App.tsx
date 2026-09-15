@@ -24,6 +24,9 @@ import {
   sendRequest,
   checkTarget,
   exportOpenApi,
+  exportPostman,
+  startMockServer,
+  stopMockServer,
   saveCollection,
   loadCollection,
   checkModel,
@@ -57,8 +60,10 @@ import {
   saveWorkspace,
   clearWorkspace,
   defaultInstructions,
+  defaultEnvironments,
+  StoredEnvironment,
 } from "./src/lib/persist";
-import { Variable, toMap, substitute, workspaceAuth } from "./src/lib/variables";
+import { toMap, substitute, workspaceAuth } from "./src/lib/variables";
 import { runCaptures, withResults } from "./src/lib/capture";
 import { toCollection, fromCollection, mergeIntoTabs, FILENAME } from "./src/lib/collection";
 import { withScheme, originOf } from "./src/lib/url";
@@ -140,12 +145,16 @@ export function describeApplied(written: string, result: VerifyResult): ApplyOut
   return { verdict: "verified", text: `${written}, ${waited} — ${summary}.` };
 }
 
-function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
+// {{BASE_URL}} rather than a literal origin: which server this hits is decided
+// by the active environment at send time, the same substitution every other
+// {{name}} in the request already goes through — not by which origin happened
+// to be active when the tab was created.
+function createTab(route?: DetectedRoute): RequestTab {
   const id = Date.now().toString() + Math.random().toString(36).slice(2);
   return {
     id,
     method: route?.method || "GET",
-    url: route ? `${baseUrl.replace(/\/+$/, "")}${route.path}` : "",
+    url: route ? `{{BASE_URL}}${route.path}` : "",
     body: route?.body ? JSON.stringify(route.body, null, 2) : "",
     headers: [{ key: "Content-Type", value: "application/json", enabled: true }],
     response: null,
@@ -157,10 +166,19 @@ function createTab(baseUrl: string, route?: DetectedRoute): RequestTab {
   };
 }
 
+// A first launch, or Reset: one "Local" environment, seeded with the
+// configured default target so there is something for a new tab to send to
+// before any project has been scanned.
+function initialEnvironments(): StoredEnvironment[] {
+  return defaultEnvironments().map((env) => ({
+    ...env,
+    variables: [{ key: "BASE_URL", value: CONFIG.DEFAULT_TARGET }],
+  }));
+}
+
 export default function App() {
   const [routes, setRoutes] = useState<DetectedRoute[]>([]);
-  const [baseUrl, setBaseUrl] = useState(CONFIG.DEFAULT_TARGET);
-  const [tabs, setTabs] = useState<RequestTab[]>([createTab(CONFIG.DEFAULT_TARGET)]);
+  const [tabs, setTabs] = useState<RequestTab[]>([createTab()]);
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
   const [scanning, setScanning] = useState(false);
   const [showScan, setShowScan] = useState(false);
@@ -168,7 +186,35 @@ export default function App() {
   const [projectName, setProjectName] = useState("ReqFlow");
   const [error, setError] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [variables, setVariables] = useState<Variable[]>([]);
+  // Local, Development, Staging — the same requests, pointed somewhere
+  // different. BASE_URL lives inside each one's variables like any other
+  // {{name}}, so switching the active one is the same substitution the app
+  // already runs before every send.
+  const [environments, setEnvironments] = useState<StoredEnvironment[]>(initialEnvironments);
+  const [activeEnvironmentId, setActiveEnvironmentId] = useState("default");
+  const activeEnvironment = React.useMemo(
+    () => environments.find((e) => e.id === activeEnvironmentId) ?? environments[0],
+    [environments, activeEnvironmentId]
+  );
+  const vars = React.useMemo(() => toMap(activeEnvironment.variables), [activeEnvironment]);
+  // the one place a raw origin string is still needed: building an absolute
+  // url for a tab the app writes itself rather than one the developer authors
+  // (an agent draft, a re-opened run) — those are tied to the request that
+  // actually happened, not meant to move with the environment later
+  const baseUrl = vars.BASE_URL || "";
+
+  const setEnvironmentVariable = (name: string, value: string) => {
+    setEnvironments((prev) =>
+      prev.map((env) => {
+        if (env.id !== activeEnvironmentId) return env;
+        const at = env.variables.findIndex((v) => v.key === name);
+        const variables = [...env.variables];
+        if (at >= 0) variables[at] = { key: name, value };
+        else variables.push({ key: name, value });
+        return { ...env, variables };
+      })
+    );
+  };
   // per endpoint timing samples, so a response can be read against its own past
   const [timings, setTimings] = useState<TimingHistory>({});
   const [recentScans, setRecentScans] = useState<string[]>([]);
@@ -297,13 +343,13 @@ export default function App() {
     (async () => {
       const saved = await loadWorkspace();
       if (!cancelled && saved) {
-        setBaseUrl(saved.baseUrl || CONFIG.DEFAULT_TARGET);
         setProjectName(saved.projectName);
         setRoutes(saved.routes);
         setTabs(saved.tabs);
         setActiveTabId(saved.activeTabId);
         setHistory(saved.history);
-        setVariables(saved.variables || []);
+        setEnvironments(saved.environments);
+        setActiveEnvironmentId(saved.activeEnvironmentId);
         setTimings(saved.timings || {});
         setRecentScans(saved.recentScans || []);
         setProjectPath(saved.projectPath || "");
@@ -330,13 +376,13 @@ export default function App() {
     const id = setTimeout(() => {
       saveWorkspace({
         version: 1,
-        baseUrl,
         projectName,
         routes,
         tabs,
         activeTabId,
         history,
-        variables,
+        environments,
+        activeEnvironmentId,
         timings,
         recentScans,
         projectPath,
@@ -352,7 +398,7 @@ export default function App() {
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, baseUrl, projectName, routes, tabs, activeTabId, history, variables, timings, recentScans, projectPath, instructions, examples, exampleLimit, generatedCode, generatedRoutes, appliedSummaries, runs]);
+  }, [hydrated, environments, activeEnvironmentId, projectName, routes, tabs, activeTabId, history, timings, recentScans, projectPath, instructions, examples, exampleLimit, generatedCode, generatedRoutes, appliedSummaries, runs]);
 
   // what ReqFlow is running, kept current so the offer to stop it is real
   const refreshRunning = React.useCallback(async () => {
@@ -482,13 +528,14 @@ export default function App() {
   // nobody chose, so it stays "no target" rather than announcing a server the
   // user has not pointed at.
   const target = React.useMemo(() => {
-    const candidates = routes.length > 0 ? [activeTab.url, baseUrl] : [activeTab.url];
+    const resolved = substitute(activeTab.url, vars);
+    const candidates = routes.length > 0 ? [resolved, baseUrl] : [resolved];
     for (const candidate of candidates) {
       const origin = originOf(candidate);
       if (origin) return origin;
     }
     return null;
-  }, [activeTab.url, baseUrl, routes.length]);
+  }, [activeTab.url, baseUrl, routes.length, vars]);
 
   // poll it so the status badge reflects reality instead of just asserting it
   const [targetUp, setTargetUp] = useState<boolean | null>(null);
@@ -557,15 +604,18 @@ export default function App() {
     const found = runCaptures(tab.captures || [], res);
     if (found.length === 0) return {};
 
-    setVariables((prev) => {
-      const next = [...prev];
-      for (const { name, value } of found) {
-        const at = next.findIndex((v) => v.key === name);
-        if (at >= 0) next[at] = { key: name, value };
-        else next.push({ key: name, value });
-      }
-      return next;
-    });
+    setEnvironments((prev) =>
+      prev.map((env) => {
+        if (env.id !== activeEnvironmentId) return env;
+        const next = [...env.variables];
+        for (const { name, value } of found) {
+          const at = next.findIndex((v) => v.key === name);
+          if (at >= 0) next[at] = { key: name, value };
+          else next.push({ key: name, value });
+        }
+        return { ...env, variables: next };
+      })
+    );
 
     const asMap: Record<string, string> = {};
     for (const { name, value } of found) asMap[name] = value;
@@ -590,7 +640,7 @@ export default function App() {
       setGeneratedRoutes((prev) => pruneGenerated(prev, result.routes));
       setProjectName(scannedPath.split("/").pop() || "Project");
       setProjectPath(scannedPath);
-      setBaseUrl(withScheme(scannedBaseUrl));
+      setEnvironmentVariable("BASE_URL", withScheme(scannedBaseUrl));
       setRecentScans((prev) => [scannedPath, ...prev.filter((p) => p !== scannedPath)].slice(0, 4));
       setShowScan(false);
     } catch (err: any) {
@@ -642,7 +692,7 @@ export default function App() {
   };
 
   const openRouteTab = (route: DetectedRoute) => {
-    const url = `${baseUrl.replace(/\/+$/, "")}${route.path}`;
+    const url = `{{BASE_URL}}${route.path}`;
     const open = tabsRef.current.find((t) => t.method === route.method && t.url === url);
     if (open) {
       setActiveTabId(open.id);
@@ -652,12 +702,12 @@ export default function App() {
 
     // a fresh one gets the route's own body and params, which the plain helper
     // has nothing to fill them from
-    const newTab = createTab(baseUrl, route);
+    const newTab = createTab(route);
 
     // once a token is in the workspace, every route opened from the sidebar
     // used to come back 401 until the header was added by hand, one tab at a
     // time. {{token}} rather than the value, so it survives the next login.
-    if (toMap(variables).token) {
+    if (vars.token) {
       newTab.headers = [
         ...newTab.headers,
         { key: "Authorization", value: "Bearer {{token}}", enabled: true },
@@ -695,7 +745,7 @@ export default function App() {
     const runnable = tabs.filter((t) => t.url.trim());
     if (runnable.length === 0 || runProgress) return;
 
-    const vars = toMap(variables);
+    const vars = toMap(activeEnvironment.variables);
     setRunSummary(null);
     setRunProgress({ done: 0, total: runnable.length });
 
@@ -792,7 +842,7 @@ export default function App() {
       return;
     }
 
-    const tab = createTab(baseUrl);
+    const tab = createTab();
     tab.method = method;
     tab.url = url;
     tab.label = label || `${method} ${url.replace(/^https?:\/\/[^/]+/, "")}`;
@@ -809,12 +859,13 @@ export default function App() {
 
   const handleReset = async () => {
     await clearWorkspace();
-    const fresh = createTab(CONFIG.DEFAULT_TARGET);
+    const fresh = createTab();
     setRoutes([]);
     setTabs([fresh]);
     setActiveTabId(fresh.id);
     setHistory([]);
-    setVariables([]);
+    setEnvironments(initialEnvironments());
+    setActiveEnvironmentId("default");
     setTimings({});
     setRecentScans([]);
     setExamples({});
@@ -834,12 +885,11 @@ export default function App() {
     // developer can see
     setRuns([]);
     setApplyError(null);
-    setBaseUrl(CONFIG.DEFAULT_TARGET);
     setError(null);
   };
 
   const handleNewTab = () => {
-    const newTab = createTab(baseUrl);
+    const newTab = createTab();
     setTabs((prev) => [...prev, newTab]);
     setActiveTabId(newTab.id);
   };
@@ -847,7 +897,7 @@ export default function App() {
   // the agent drafts a request, it does not send it. the tab opens filled in
   // and waits for the user to press Send like any other.
   const handleAgentCreateRequest = (draft: AgentRequestDraft) => {
-    const newTab = createTab(baseUrl);
+    const newTab = createTab();
     const drafted = Object.entries(draft.headers || {}).map(([key, value]) => ({
       key,
       value: String(value),
@@ -927,7 +977,7 @@ export default function App() {
       return;
     }
 
-    const tab = createTab(baseUrl);
+    const tab = createTab();
     tab.method = route.method;
     tab.url = route.url;
     tab.label = route.label;
@@ -1021,7 +1071,7 @@ export default function App() {
         };
         focusId = next[at].id;
       } else {
-        const tab = createTab(baseUrl);
+        const tab = createTab();
         tab.method = s.method;
         tab.url = s.url;
         tab.body = s.body;
@@ -1075,15 +1125,7 @@ export default function App() {
   };
 
   const handleAgentSetVariable = (name: string, value: string) => {
-    setVariables((prev) => {
-      const at = prev.findIndex((v) => v.key === name);
-      if (at >= 0) {
-        const next = [...prev];
-        next[at] = { key: name, value };
-        return next;
-      }
-      return [...prev, { key: name, value }];
-    });
+    setEnvironmentVariable(name, value);
   };
 
   // an endpoint the project does not have yet. the code is shown, and a tab is
@@ -1201,7 +1243,7 @@ export default function App() {
     try {
       // the wire gets the resolved values, the tab keeps the {{name}} it was
       // written with, exactly as a hand-sent request does
-      const vars = toMap(variables);
+      const vars = toMap(activeEnvironment.variables);
       const writtenHeaders = generated.request.headers || {};
       const resolved: Record<string, string> = {};
       Object.entries(writtenHeaders).forEach(([k, v]) => {
@@ -1347,7 +1389,7 @@ export default function App() {
     try {
       // {{name}} is resolved here rather than in the editors, so what the tab
       // shows stays the reusable version and only the wire sees real values
-      const vars = toMap(variables);
+      const vars = toMap(activeEnvironment.variables);
 
       let parsedBody = undefined;
       if (["POST", "PUT", "PATCH"].includes(activeTab.method) && activeTab.body.trim()) {
@@ -1434,20 +1476,27 @@ export default function App() {
             setShowScan(true);
           }}
           scanning={scanning}
-          baseUrl={baseUrl}
-          onBaseUrlChange={setBaseUrl}
           history={history}
           onSelectHistory={handleReplayHistory}
           onReset={handleReset}
-          variables={variables}
-          onVariablesChange={setVariables}
+          environments={environments}
+          activeEnvironmentId={activeEnvironmentId}
+          onSelectEnvironment={setActiveEnvironmentId}
+          onEnvironmentsChange={setEnvironments}
           onExportOpenApi={() => exportOpenApi(routes, projectName, baseUrl)}
+          onExportPostman={() => exportPostman(toCollection(tabs, environments, projectName))}
+          onStartMock={() =>
+            startMockServer(
+              tabs.map((t) => ({ method: t.method, url: t.url, sampleResponse: t.response?.data }))
+            )
+          }
+          onStopMock={stopMockServer}
           onSaveCollection={
             projectPath
               ? async () => {
                   const { path } = await saveCollection(
                     projectPath,
-                    toCollection(tabs, variables, baseUrl, projectName)
+                    toCollection(tabs, environments, projectName)
                   );
                   return `saved to ${path.split("/").pop()}`;
                 }
@@ -1470,13 +1519,28 @@ export default function App() {
                     (t) => t.method === read.tabs[0].method && t.url === read.tabs[0].url
                   );
                   if (first) setActiveTabId(first.id);
-                  if (read.baseUrl) setBaseUrl(read.baseUrl);
-                  setVariables((prev) => {
+
+                  // an environment already open by name is brought up to date
+                  // with anything it does not already have; one the file names
+                  // that is not open yet is added. a value already in the
+                  // workspace is the live one — the file's copy of it was
+                  // written empty on purpose.
+                  setEnvironments((prev) => {
                     const next = [...prev];
-                    for (const v of read.variables) {
-                      // a value already in the workspace is the live one; the
-                      // file's copy of it was written empty on purpose
-                      if (!next.some((existing) => existing.key === v.key)) next.push(v);
+                    for (const loaded of read.environments) {
+                      const at = next.findIndex((e) => e.name === loaded.name);
+                      if (at >= 0) {
+                        const vars = [...next[at].variables];
+                        for (const v of loaded.variables) {
+                          if (!vars.some((existing) => existing.key === v.key)) vars.push(v);
+                        }
+                        next[at] = { ...next[at], variables: vars };
+                      } else {
+                        next.push({
+                          id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
+                          ...loaded,
+                        });
+                      }
                     }
                     return next;
                   });
@@ -1539,8 +1603,8 @@ export default function App() {
             pathParams={activeTab.pathParams || {}}
             onPathParamsChange={(v) => updateActiveTab({ pathParams: v })}
             onSaveToken={(value) => handleAgentSetVariable("token", value)}
-            savedToken={toMap(variables).token || null}
-            variables={toMap(variables)}
+            savedToken={vars.token || null}
+            variables={vars}
             onScanPress={() => {
               setError(null);
               setShowScan(true);
@@ -1555,7 +1619,7 @@ export default function App() {
             // the trace describes a request that happened, so it shows the
             // address that was actually used rather than the :id placeholder
             url={applyPathParams(
-              substitute(activeTab.url, toMap(variables)),
+              substitute(activeTab.url, vars),
               activeTab.pathParams || {}
             )}
             comparisons={timingReport.comparisons}
@@ -1574,7 +1638,7 @@ export default function App() {
           onAgentRequests={handleAgentRequests}
           onSetVariable={handleAgentSetVariable}
           onFocusRequest={handleFocusRequest}
-          variables={toMap(variables)}
+          variables={vars}
           projectPath={stylePath}
           onGeneratedCode={handleGeneratedCode}
           onShowCode={() => generated && setShowCode(true)}
@@ -1610,7 +1674,7 @@ export default function App() {
         }
         onOpenRequest={() => {
           if (!openRun) return;
-          const tab = createTab(baseUrl);
+          const tab = createTab();
           tab.method = openRun.method;
           tab.url = `${baseUrl.replace(/\/+$/, "")}${openRun.path}`;
           tab.label = openRun.path;

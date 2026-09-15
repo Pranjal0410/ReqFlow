@@ -12,7 +12,8 @@ import {
   ApplyOutcome,
   RunRecord,
 } from "../types";
-import { Variable, isSecretVariable } from "./variables";
+import { isSecretVariable } from "./variables";
+import { Environment } from "./collection";
 import { TimingHistory } from "./timings";
 import { ExampleStore, ExampleLimit, coerceLimit } from "./examples";
 
@@ -23,15 +24,22 @@ import { isSecretHeader, holdsACredential } from "./variables";
 // re-exported so the callers that already take it from here keep working
 export { isSecretHeader };
 
+// an id the environment carries only in memory, so the active one and the
+// secrets store can point at it without depending on its name — renaming an
+// environment must not lose which one was active or its stored secrets
+export interface StoredEnvironment extends Environment {
+  id: string;
+}
+
 export interface Workspace {
   version: 1;
-  baseUrl: string;
   projectName: string;
   routes: DetectedRoute[];
   tabs: RequestTab[];
   activeTabId: string;
   history: HistoryEntry[];
-  variables: Variable[];
+  environments: StoredEnvironment[];
+  activeEnvironmentId: string;
   timings: TimingHistory;
   // folders already scanned, so the path does not have to be typed out again
   recentScans: string[];
@@ -133,27 +141,43 @@ function stripForStorage(tabs: RequestTab[]): { tabs: RequestTab[]; secrets: Sec
   return { tabs: cleaned, secrets };
 }
 
-// variables share the secrets store with headers. a tab id can never collide
-// with this because ids are generated from Date.now().
-const VAR_SCOPE = "__variables__";
+// variables share the secrets store with headers, keyed by environment id
+// rather than one shared scope — the same variable name in two environments
+// (a TOKEN for Local and a different one for Staging) is two secrets, not one.
+const ENV_SCOPE = (id: string) => `env:${id}`;
 
-function stripVarsForStorage(vars: Variable[]): { vars: Variable[]; secret: Record<string, string> } {
-  const secret: Record<string, string> = {};
-  const cleaned = vars.map((v) => {
-    if (v.key.trim() && isSecretVariable(v.key) && v.value) {
-      secret[v.key] = v.value;
-      // the name stays visible so you can see the variable exists
-      return { ...v, value: "" };
-    }
-    return v;
+function stripEnvironmentsForStorage(
+  environments: StoredEnvironment[]
+): { environments: StoredEnvironment[]; secrets: Secrets } {
+  const secrets: Secrets = {};
+  const cleaned = environments.map((env) => {
+    const secret: Record<string, string> = {};
+    const variables = (env.variables || []).map((v) => {
+      if (v.key.trim() && isSecretVariable(v.key) && v.value) {
+        secret[v.key] = v.value;
+        // the name stays visible so you can see the variable exists
+        return { ...v, value: "" };
+      }
+      return v;
+    });
+    if (Object.keys(secret).length) secrets[ENV_SCOPE(env.id)] = secret;
+    return { ...env, variables };
   });
-  return { vars: cleaned, secret };
+  return { environments: cleaned, secrets };
 }
 
-function restoreVars(vars: Variable[], secrets: Secrets): Variable[] {
-  const held = secrets[VAR_SCOPE];
-  if (!held) return vars;
-  return vars.map((v) => (held[v.key] ? { ...v, value: held[v.key] } : v));
+function restoreEnvironments(
+  environments: StoredEnvironment[],
+  secrets: Secrets
+): StoredEnvironment[] {
+  return environments.map((env) => {
+    const held = secrets[ENV_SCOPE(env.id)];
+    if (!held) return env;
+    return {
+      ...env,
+      variables: (env.variables || []).map((v) => (held[v.key] ? { ...v, value: held[v.key] } : v)),
+    };
+  });
 }
 
 function restoreSecrets(tabs: RequestTab[], secrets: Secrets): RequestTab[] {
@@ -170,15 +194,20 @@ function restoreSecrets(tabs: RequestTab[], secrets: Secrets): RequestTab[] {
 }
 
 export async function saveWorkspace(ws: Workspace): Promise<void> {
-  const { tabs, secrets } = stripForStorage(ws.tabs);
-  const { vars, secret } = stripVarsForStorage(ws.variables || []);
-  if (Object.keys(secret).length) secrets[VAR_SCOPE] = secret;
+  const { tabs, secrets: tabSecrets } = stripForStorage(ws.tabs);
+  const { environments, secrets: envSecrets } = stripEnvironmentsForStorage(ws.environments || []);
+  const secrets = { ...tabSecrets, ...envSecrets };
   try {
-    await AsyncStorage.setItem(KEY, JSON.stringify({ ...ws, tabs, variables: vars }));
+    await AsyncStorage.setItem(KEY, JSON.stringify({ ...ws, tabs, environments }));
     await writeSecrets(secrets);
   } catch {
     // same reasoning as above, a failed save must not take the app down
   }
+}
+
+// The workspace a first launch, or a launch before environments existed, gets.
+export function defaultEnvironments(): StoredEnvironment[] {
+  return [{ id: "default", name: "Local", variables: [] }];
 }
 
 export async function loadWorkspace(): Promise<Workspace | null> {
@@ -203,15 +232,38 @@ export async function loadWorkspace(): Promise<Workspace | null> {
     ? parsed.activeTabId
     : tabs[0].id;
 
+  // a workspace saved before environments existed has a flat baseUrl and
+  // variables instead — folded into one "Local" environment, the same
+  // migration a v1 collection file gets on import
+  const rawEnvironments: StoredEnvironment[] =
+    Array.isArray(parsed.environments) && parsed.environments.length > 0
+      ? parsed.environments
+      : [
+          {
+            id: "default",
+            name: "Local",
+            variables: [
+              ...(Array.isArray(parsed.variables) ? parsed.variables : []),
+              ...(typeof parsed.baseUrl === "string" && parsed.baseUrl
+                ? [{ key: "BASE_URL", value: parsed.baseUrl }]
+                : []),
+            ],
+          },
+        ];
+  const environments = restoreEnvironments(rawEnvironments, secrets);
+  const activeEnvironmentId = environments.some((e) => e.id === parsed.activeEnvironmentId)
+    ? parsed.activeEnvironmentId
+    : environments[0].id;
+
   return {
     version: 1,
-    baseUrl: typeof parsed.baseUrl === "string" ? parsed.baseUrl : "",
     projectName: typeof parsed.projectName === "string" ? parsed.projectName : "ReqFlow",
     routes: Array.isArray(parsed.routes) ? parsed.routes : [],
     tabs,
     activeTabId,
     history: Array.isArray(parsed.history) ? parsed.history : [],
-    variables: restoreVars(Array.isArray(parsed.variables) ? parsed.variables : [], secrets),
+    environments,
+    activeEnvironmentId,
     // measurements, not credentials, so they ride along in the workspace blob
     timings: parsed.timings && typeof parsed.timings === "object" ? parsed.timings : {},
     recentScans: Array.isArray(parsed.recentScans) ? parsed.recentScans : [],

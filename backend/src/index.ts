@@ -14,6 +14,7 @@ import generateRouter from "./routes/generate";
 import modelRouter from "./routes/model";
 import projectRouter from "./routes/project";
 import collectionRouter from "./routes/collection";
+import mockRouter from "./routes/mock";
 import { stopAll, stopAllSync } from "./services/projectRunner";
 
 const app = express();
@@ -30,6 +31,7 @@ app.use("/api/generate", generateRouter);
 app.use("/api/model", modelRouter);
 app.use("/api/project", projectRouter);
 app.use("/api/collection", collectionRouter);
+app.use("/api/mock", mockRouter);
 
 // The desktop app decides whether to adopt a server already on this port or to
 // warn that something else has it. "something answered" is not enough to make

@@ -163,6 +163,72 @@ describe("running a collection", () => {
   });
 });
 
+describe("choosing an environment", () => {
+  const collection = {
+    environments: [
+      { name: "Local", variables: [{ key: "token", value: "local-token" }] },
+      { name: "Staging", variables: [{ key: "token", value: "staging-token" }] },
+    ],
+    requests: [
+      {
+        name: "who am i",
+        url: "PLACEHOLDER",
+        headers: [{ key: "Authorization", value: "Bearer {{token}}", enabled: true }],
+      },
+    ],
+  };
+
+  const against = (server: { url: string }) => ({
+    ...collection,
+    requests: [{ ...collection.requests[0], url: `${server.url}/a` }],
+  });
+
+  it("runs against the named environment's variables", async () => {
+    const server = await serve((req, _body, res) => json(res, 200, { auth: req.headers.authorization }));
+    const result = await runCollection(against(server), { env: "Staging" });
+    expect(result.outcomes[0].status).toBe(200);
+    await server.close();
+  });
+
+  it("is case-insensitive about the environment name", async () => {
+    const server = await serve((req, _body, res) => json(res, 200, { auth: req.headers.authorization }));
+    await runCollection(against(server), { env: "staging" });
+    expect(server.seen).toHaveLength(1);
+    await server.close();
+  });
+
+  it("defaults to the first environment when none is named", async () => {
+    const server = await serve((req, _body, res) => json(res, 200, { auth: req.headers.authorization }));
+    const result = await runCollection(against(server));
+    expect(result.outcomes[0].status).toBe(200);
+    await server.close();
+  });
+
+  it("fails clearly when the named environment does not exist", async () => {
+    await expect(runCollection(collection, { env: "Prod" })).rejects.toThrow(/no environment named "Prod"/);
+  });
+
+  // a file written before environments existed still runs — folded into one
+  // implied environment by the same reader the app uses
+  it("still runs a v1 file with a flat baseUrl and variables", async () => {
+    const server = await serve((req, _body, res) => json(res, 200, { auth: req.headers.authorization }));
+    const result = await runCollection({
+      baseUrl: server.url,
+      variables: [{ key: "token", value: "legacy-token" }],
+      requests: [
+        {
+          name: "legacy",
+          url: `${server.url}/a`,
+          headers: [{ key: "Authorization", value: "Bearer {{token}}", enabled: true }],
+          tests: [{ field: "data.auth", operator: "equals", value: "Bearer legacy-token" }],
+        },
+      ],
+    });
+    expect(result.passed).toBe(1);
+    await server.close();
+  });
+});
+
 describe("pointing the same requests somewhere else", () => {
   it("keeps the path and replaces the origin", () => {
     expect(withBaseUrl("http://localhost:3001/api/users?page=2", "https://staging.example.com")).toBe(
@@ -183,6 +249,10 @@ describe("reading the command line", () => {
   it("takes the file, the base url and the variables", () => {
     const args = parseArgs(["run", "c.json", "--base-url", "http://x", "--var", "token=abc"]);
     expect(args).toMatchObject({ file: "c.json", baseUrl: "http://x", variables: { token: "abc" } });
+  });
+
+  it("takes the environment to run against", () => {
+    expect(parseArgs(["run", "c.json", "--env", "Staging"]).env).toBe("Staging");
   });
 
   it("keeps an = inside the value", () => {

@@ -12,6 +12,7 @@ import { radius, shadow, transition } from "../theme/tokens";
 import Icon from "./Icon";
 import { DetectedRoute, HistoryEntry, GeneratedRoute, RunRecord } from "../types";
 import { Variable, isSecretVariable } from "../lib/variables";
+import { StoredEnvironment } from "../lib/persist";
 import { routeKey } from "../lib/generatedRoutes";
 import { recentEndpoints } from "../lib/recent";
 import * as Clipboard from "expo-clipboard";
@@ -28,14 +29,23 @@ interface Props {
   onShowSource: (route: DetectedRoute) => void;
   onScanPress: () => void;
   scanning: boolean;
-  baseUrl: string;
-  onBaseUrlChange: (url: string) => void;
   history: HistoryEntry[];
   onSelectHistory: (entry: HistoryEntry) => void;
   onReset: () => void;
-  variables: Variable[];
-  onVariablesChange: (vars: Variable[]) => void;
+  // Local, Development, Staging — the requests are the same, only which of
+  // these is active changes what {{BASE_URL}} and the rest resolve to.
+  environments: StoredEnvironment[];
+  activeEnvironmentId: string;
+  onSelectEnvironment: (id: string) => void;
+  onEnvironmentsChange: (envs: StoredEnvironment[]) => void;
   onExportOpenApi: () => Promise<string>;
+  // requests + environments, built the same way as the ReqFlow collection is,
+  // then converted to Postman's shapes on the backend
+  onExportPostman: () => Promise<{ collection: any; environments: any[] }>;
+  // stands up a fake server on the requests' own shapes, answering each with
+  // its last captured response — undefined once none is running
+  onStartMock: () => Promise<{ id: string; port: number }>;
+  onStopMock: (id: string) => Promise<void>;
   // absent until a project is open: there is nowhere to put the file before then
   onSaveCollection?: () => Promise<string>;
   onLoadCollection?: () => Promise<string>;
@@ -59,14 +69,17 @@ export default function Sidebar({
   onShowSource,
   onScanPress,
   scanning,
-  baseUrl,
-  onBaseUrlChange,
   history,
   onSelectHistory,
   onReset,
-  variables,
-  onVariablesChange,
+  environments,
+  activeEnvironmentId,
+  onSelectEnvironment,
+  onEnvironmentsChange,
   onExportOpenApi,
+  onExportPostman,
+  onStartMock,
+  onStopMock,
   onSaveCollection,
   onLoadCollection,
   generatedRoutes,
@@ -78,10 +91,42 @@ export default function Sidebar({
 }: Props) {
   const [hovered, setHovered] = React.useState<string | null>(null);
   const [confirmReset, setConfirmReset] = React.useState(false);
+  const [confirmDeleteEnv, setConfirmDeleteEnv] = React.useState(false);
   const [search, setSearch] = React.useState("");
   const [activePath, setActivePath] = React.useState<string | null>(null);
   const [showVars, setShowVars] = React.useState(false);
   const [specCopied, setSpecCopied] = React.useState<string | null>(null);
+
+  const activeEnvironment =
+    environments.find((e) => e.id === activeEnvironmentId) ?? environments[0];
+
+  const updateActiveVariables = (vars: Variable[]) => {
+    onEnvironmentsChange(
+      environments.map((e) => (e.id === activeEnvironment.id ? { ...e, variables: vars } : e))
+    );
+  };
+
+  const addEnvironment = () => {
+    const id = `${Date.now()}${Math.random().toString(36).slice(2)}`;
+    onEnvironmentsChange([
+      ...environments,
+      { id, name: `Environment ${environments.length + 1}`, variables: [{ key: "BASE_URL", value: "" }] },
+    ]);
+    onSelectEnvironment(id);
+  };
+
+  const renameActiveEnvironment = (name: string) => {
+    onEnvironmentsChange(
+      environments.map((e) => (e.id === activeEnvironment.id ? { ...e, name } : e))
+    );
+  };
+
+  const deleteActiveEnvironment = () => {
+    if (environments.length <= 1) return;
+    const next = environments.filter((e) => e.id !== activeEnvironment.id);
+    onEnvironmentsChange(next);
+    onSelectEnvironment(next[0].id);
+  };
 
   // the note replaces the label for a moment, the way the OpenAPI copy does:
   // a file written somewhere the user cannot see needs to say so
@@ -105,6 +150,53 @@ export default function Sidebar({
       setSpecCopied(err?.response?.data?.error || "Export failed");
     }
     setTimeout(() => setSpecCopied(null), 2200);
+  };
+
+  const [postmanCopied, setPostmanCopied] = React.useState<string | null>(null);
+
+  const copyPostmanCollection = async () => {
+    try {
+      const { collection } = await onExportPostman();
+      await Clipboard.setStringAsync(JSON.stringify(collection, null, 2));
+      setPostmanCopied("Copied Postman collection");
+    } catch (err: any) {
+      setPostmanCopied(err?.response?.data?.error || "Export failed");
+    }
+    setTimeout(() => setPostmanCopied(null), 2200);
+  };
+
+  const [mock, setMock] = React.useState<{ id: string; port: number } | null>(null);
+  const [mockError, setMockError] = React.useState<string | null>(null);
+
+  const toggleMock = async () => {
+    setMockError(null);
+    try {
+      if (mock) {
+        await onStopMock(mock.id);
+        setMock(null);
+      } else {
+        setMock(await onStartMock());
+      }
+    } catch (err: any) {
+      setMockError(err?.response?.data?.error || "Mock server failed");
+    }
+  };
+
+  // the active environment specifically, by name — the same order this and
+  // the backend both build the list in, so it is the one row this app is
+  // pointed at right now rather than whichever the list happens to lead with
+  const copyPostmanEnvironment = async () => {
+    try {
+      const { environments: postman } = await onExportPostman();
+      const match =
+        postman.find((e: any) => e.name === activeEnvironment.name) || postman[0];
+      if (!match) throw new Error("nothing to export");
+      await Clipboard.setStringAsync(JSON.stringify(match, null, 2));
+      setPostmanCopied(`Copied Postman env: ${activeEnvironment.name}`);
+    } catch (err: any) {
+      setPostmanCopied(err?.response?.data?.error || "Export failed");
+    }
+    setTimeout(() => setPostmanCopied(null), 2200);
   };
 
   const matches = (method: string, path: string) => {
@@ -163,30 +255,83 @@ export default function Sidebar({
         </Pressable>
       </View>
 
-      {/* the server the scanned routes will be sent to. without this every
-          route defaulted to ReqFlow's own backend and returned 404 */}
-      <Text style={styles.fieldLabel}>Base URL</Text>
-      <TextInput
-        style={styles.baseUrl}
-        placeholder="http://localhost:3000"
-        placeholderTextColor={colors.textDim}
-        value={baseUrl}
-        onChangeText={onBaseUrlChange}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
+      {/* Local, Development, Staging — the same requests, sent somewhere
+          different depending on which of these is active. Renaming or
+          removing acts on the active one; requests never change. */}
+      <Text style={styles.fieldLabel}>Environment</Text>
+      <View style={styles.envRow}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {environments.map((env) => (
+            <Pressable
+              key={env.id}
+              style={[styles.envChip, env.id === activeEnvironment.id && styles.envChipActive]}
+              onPress={() => onSelectEnvironment(env.id)}
+            >
+              <Text
+                style={[
+                  styles.envChipText,
+                  env.id === activeEnvironment.id && styles.envChipTextActive,
+                ]}
+                numberOfLines={1}
+              >
+                {env.name || "environment"}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <Pressable
+          style={({ hovered: h }: any) => [styles.envAddBtn, h && styles.resetHover]}
+          onPress={addEnvironment}
+          accessibilityLabel="add an environment"
+        >
+          <Icon name="plus" size={12} color={colors.textDim} />
+        </Pressable>
+      </View>
 
-      {/* {{name}} placeholders, resolved on every send. the agent writes the
-          token in here after a login so each tab stops needing its own. */}
+      <View style={styles.envEditRow}>
+        <TextInput
+          style={styles.envNameInput}
+          placeholder="environment name"
+          placeholderTextColor={colors.textDim}
+          value={activeEnvironment.name}
+          onChangeText={renameActiveEnvironment}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        {environments.length > 1 && (
+          <Pressable
+            style={({ hovered: h }: any) => [styles.envDeleteBtn, h && styles.resetHover]}
+            onPress={() => {
+              if (confirmDeleteEnv) {
+                setConfirmDeleteEnv(false);
+                deleteActiveEnvironment();
+              } else {
+                setConfirmDeleteEnv(true);
+                setTimeout(() => setConfirmDeleteEnv(false), 4000);
+              }
+            }}
+            accessibilityLabel={`delete the ${activeEnvironment.name} environment`}
+          >
+            <Icon name="close" size={12} color={confirmDeleteEnv ? colors.statusErr : colors.textDim} />
+          </Pressable>
+        )}
+      </View>
+
+      {/* {{name}} placeholders, resolved on every send. BASE_URL is one of
+          these like any other — it decides where this environment's requests
+          go — and the agent writes the token in here after a login so each
+          tab stops needing its own. */}
       <Pressable style={styles.varsHeader} onPress={() => setShowVars(!showVars)}>
         <Icon name={showVars ? "chevronDown" : "chevronRight"} size={12} color={colors.textDim} />
         <Text style={styles.fieldLabel}>Variables</Text>
-        {variables.length > 0 && <Text style={styles.groupCount}>{variables.length}</Text>}
+        {activeEnvironment.variables.length > 0 && (
+          <Text style={styles.groupCount}>{activeEnvironment.variables.length}</Text>
+        )}
       </Pressable>
 
       {showVars && (
         <View style={styles.varsBox}>
-          {variables.map((v, i) => (
+          {activeEnvironment.variables.map((v, i) => (
             <View key={i} style={styles.varRow}>
               <TextInput
                 style={[styles.varInput, styles.varKey]}
@@ -194,7 +339,9 @@ export default function Sidebar({
                 placeholderTextColor={colors.textDim}
                 value={v.key}
                 onChangeText={(key) =>
-                  onVariablesChange(variables.map((x, j) => (j === i ? { ...x, key } : x)))
+                  updateActiveVariables(
+                    activeEnvironment.variables.map((x, j) => (j === i ? { ...x, key } : x))
+                  )
                 }
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -205,7 +352,9 @@ export default function Sidebar({
                 placeholderTextColor={colors.textDim}
                 value={v.value}
                 onChangeText={(value) =>
-                  onVariablesChange(variables.map((x, j) => (j === i ? { ...x, value } : x)))
+                  updateActiveVariables(
+                    activeEnvironment.variables.map((x, j) => (j === i ? { ...x, value } : x))
+                  )
                 }
                 autoCapitalize="none"
                 autoCorrect={false}
@@ -214,7 +363,9 @@ export default function Sidebar({
               <Pressable
                 accessibilityLabel="remove this variable"
                 style={styles.varRemove}
-                onPress={() => onVariablesChange(variables.filter((_, j) => j !== i))}
+                onPress={() =>
+                  updateActiveVariables(activeEnvironment.variables.filter((_, j) => j !== i))
+                }
               >
                 <Icon name="close" size={12} color={colors.textDim} />
               </Pressable>
@@ -222,11 +373,16 @@ export default function Sidebar({
           ))}
           <Pressable
             style={({ hovered: h }: any) => [styles.varAdd, h && styles.varAddHover]}
-            onPress={() => onVariablesChange([...variables, { key: "", value: "" }])}
+            onPress={() =>
+              updateActiveVariables([...activeEnvironment.variables, { key: "", value: "" }])
+            }
           >
             <Text style={styles.varAddText}>+ Add variable</Text>
           </Pressable>
-          <Text style={styles.varsHint}>use as {"{{name}}"} in a url, header or body</Text>
+          <Text style={styles.varsHint}>
+            use as {"{{name}}"} in a url, header or body — {"{{BASE_URL}}"} decides where this
+            environment's requests go
+          </Text>
         </View>
       )}
 
@@ -261,6 +417,36 @@ export default function Sidebar({
           )}
         </View>
       )}
+
+      {/* the same requests, in Postman's format — for an existing Postman
+          user who wants to keep working there instead */}
+      <View style={styles.collectionRow}>
+        <Pressable
+          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+          onPress={copyPostmanCollection}
+        >
+          <Text style={styles.exportText}>{postmanCopied || "Copy Postman collection"}</Text>
+        </Pressable>
+        <Pressable
+          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+          onPress={copyPostmanEnvironment}
+        >
+          <Text style={styles.exportText}>Copy Postman env</Text>
+        </Pressable>
+      </View>
+
+      {/* a fake server on these requests' own shapes, for building against
+          before the real one answers — or without hitting it at all */}
+      <View style={styles.collectionRow}>
+        <Pressable
+          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+          onPress={toggleMock}
+        >
+          <Text style={styles.exportText}>
+            {mock ? `Stop mock (:${mock.port})` : mockError || "Start mock server"}
+          </Text>
+        </Pressable>
+      </View>
 
       <TextInput
         style={styles.search}
@@ -616,7 +802,51 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
     marginBottom: 5,
   },
-  baseUrl: {
+  envRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 6,
+  },
+  envChip: {
+    paddingVertical: 5,
+    paddingHorizontal: 9,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceLight,
+    marginRight: 5,
+    ...transition("background-color"),
+  },
+  envChipActive: {
+    backgroundColor: colors.accentDim,
+    borderWidth: 1,
+    borderColor: colors.accent,
+  },
+  envChipText: {
+    color: colors.textDim,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  envChipTextActive: {
+    color: colors.text,
+  },
+  envAddBtn: {
+    width: 24,
+    height: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...transition("background-color"),
+  },
+  envEditRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 12,
+  },
+  envNameInput: {
+    flex: 1,
     backgroundColor: colors.surfaceLight,
     color: colors.text,
     borderRadius: radius.md,
@@ -624,8 +854,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     fontSize: 12,
     fontFamily: "monospace",
-    marginBottom: 12,
     ...shadow.sm,
+  },
+  envDeleteBtn: {
+    padding: 6,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
   },
   collectionRow: { flexDirection: "row", gap: 6 },
   exportBtn: {

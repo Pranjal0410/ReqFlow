@@ -37,7 +37,12 @@ export interface RunResult {
 }
 
 export interface RunOptions {
-  // overrides the collection's own, for the same requests against staging
+  // which of the collection's environments to run against. defaults to the
+  // first one when left out — for a collection with only one, there is
+  // nothing to choose
+  env?: string;
+  // overrides the chosen environment's own, for the same requests against
+  // somewhere it does not name
   baseUrl?: string;
   // values for {{name}}, for the ones a committed file cannot carry
   variables?: Record<string, string>;
@@ -69,10 +74,25 @@ export async function runCollection(raw: any, options: RunOptions = {}): Promise
   const read: Imported | null = fromCollection(raw);
   if (!read) throw new Error("that file has no requests in it");
 
-  // the file's own variables first, then anything given on the command line,
-  // which is where the values a committed file must not hold come from
+  // named on the command line, or the file's first when there is nothing to
+  // choose between — a collection with one environment should not need --env
+  // spelled out just to run
+  const chosen = options.env
+    ? read.environments.find((e) => e.name.toLowerCase() === options.env!.toLowerCase())
+    : read.environments[0];
+  if (!chosen) {
+    throw new Error(
+      `no environment named "${options.env}" in this collection (has: ${read.environments
+        .map((e) => e.name)
+        .join(", ") || "none"})`
+    );
+  }
+
+  // the chosen environment's variables first, then anything given on the
+  // command line, which is where the values a committed file must not hold
+  // come from
   const vars: Record<string, string> = {
-    ...toMap(read.variables),
+    ...toMap(chosen.variables),
     ...(options.variables || {}),
   };
 

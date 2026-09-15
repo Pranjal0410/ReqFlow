@@ -10,6 +10,7 @@ import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { expandHome } from "../services/fileReader";
+import { buildPostmanCollection, buildPostmanEnvironment } from "../services/postman";
 
 const router = Router();
 
@@ -68,6 +69,25 @@ router.post("/", (req: Request, res: Response) => {
       code: "ACCESS_DENIED",
       path: file,
     });
+  }
+});
+
+// built from the collection the client already has in memory, the same way
+// the OpenAPI export is — no re-scan, no file on disk required
+router.post("/postman", (req: Request, res: Response) => {
+  const { collection } = req.body || {};
+  if (!collection || typeof collection !== "object" || !Array.isArray(collection.requests)) {
+    return res.status(400).json({ error: "collection must be an object with a requests array" });
+  }
+
+  try {
+    const environments = Array.isArray(collection.environments) ? collection.environments : [];
+    res.json({
+      collection: buildPostmanCollection(collection),
+      environments: environments.map(buildPostmanEnvironment),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

@@ -243,6 +243,43 @@ export async function exportOpenApi(
   return JSON.stringify(res.data, null, 2);
 }
 
+// The same collection, in Postman's format instead of ReqFlow's own — built
+// from what the client already has, the same way the OpenAPI export is, so an
+// existing ReqFlow user can keep working somewhere else without rebuilding it
+// by hand.
+export async function exportPostman(
+  collection: any
+): Promise<{ collection: any; environments: any[] }> {
+  const res = await withTimeout(
+    axios.post(`${BASE}/collection/postman`, { collection }, { timeout: TIMEOUTS.quick }),
+    "the Postman export"
+  );
+  return res.data;
+}
+
+export interface MockInfo {
+  id: string;
+  port: number;
+}
+
+// Stands up a fake server on the shapes of the requests already in the
+// workspace, each answering with the sample given for it (a captured response,
+// or nothing) — so a frontend can be built against them before the real
+// backend exists, or without hitting it.
+export async function startMockServer(
+  requests: { method: string; url: string; sampleResponse?: any }[]
+): Promise<MockInfo> {
+  const res = await withTimeout(
+    axios.post(`${BASE}/mock`, { requests }, { timeout: TIMEOUTS.quick }),
+    "the mock server"
+  );
+  return res.data;
+}
+
+export async function stopMockServer(id: string): Promise<void> {
+  await withTimeout(axios.delete(`${BASE}/mock/${id}`, { timeout: TIMEOUTS.quick }), "the mock server to stop");
+}
+
 // The workspace as a file beside the code it tests. Written by the backend
 // rather than downloaded, because a file in the project is what can be
 // committed, reviewed, and run by `reqflow run` without the app.

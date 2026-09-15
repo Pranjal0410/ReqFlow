@@ -12,6 +12,7 @@ const FILENAME = "reqflow.collection.json";
 
 interface Args {
   file: string | null;
+  env?: string;
   baseUrl?: string;
   variables: Record<string, string>;
   json: boolean;
@@ -25,6 +26,7 @@ export function parseArgs(argv: string[]): Args {
     const arg = argv[i];
     if (arg === "--help" || arg === "-h") out.help = true;
     else if (arg === "--json") out.json = true;
+    else if (arg === "--env") out.env = argv[++i];
     else if (arg === "--base-url") out.baseUrl = argv[++i];
     else if (arg === "--var") {
       // --var token=abc. The values a committed file is not allowed to hold
@@ -57,6 +59,7 @@ export function findCollection(from: string): string | null {
 const USAGE = `reqflow run [file] — send the requests in a ReqFlow collection
 
   file               a ${FILENAME}; found automatically if left out
+  --env <name>       which environment to run against; the first one if left out
   --base-url <url>   send the same requests somewhere else
   --var name=value   a value for {{name}}, for the ones the file cannot hold
   --json             print the result as JSON instead of as text
@@ -99,6 +102,7 @@ export async function main(argv: string[]): Promise<number> {
   let result;
   try {
     result = await runCollection(parsed, {
+      env: args.env,
       baseUrl: args.baseUrl,
       variables: args.variables,
       onRequest: args.json ? undefined : (o) => console.log(line(o)),

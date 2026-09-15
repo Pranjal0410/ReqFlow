@@ -24,12 +24,22 @@ const tab = (over: Partial<RequestTab> = {}): RequestTab => ({
   ...over,
 });
 
+const oneEnv = (variables: { key: string; value: string }[] = []) => [
+  { name: "Local", variables },
+];
+
 describe("writing the workspace out", () => {
   it("keeps what a request is made of", () => {
-    const c = toCollection([tab()], [], "http://localhost:3001", "demo");
+    const c = toCollection(
+      [tab()],
+      oneEnv([{ key: "BASE_URL", value: "http://localhost:3001" }]),
+      "demo"
+    );
     expect(c.reqflow).toBe(FORMAT);
     expect(c.name).toBe("demo");
-    expect(c.baseUrl).toBe("http://localhost:3001");
+    expect(c.environments).toEqual(
+      oneEnv([{ key: "BASE_URL", value: "http://localhost:3001" }])
+    );
     expect(c.requests).toHaveLength(1);
     expect(c.requests[0]).toMatchObject({
       method: "GET",
@@ -44,14 +54,13 @@ describe("writing the workspace out", () => {
   it("keeps the scheme of a credential header and names what it needs", () => {
     const c = toCollection(
       [tab({ headers: [{ key: "Authorization", value: "Bearer real-token", enabled: true }] })],
-      [],
-      "",
+      oneEnv(),
       "x"
     );
     expect(c.requests[0].headers).toEqual([
       { key: "Authorization", value: "Bearer {{token}}", enabled: true },
     ]);
-    expect(c.variables).toContainEqual({ key: "token", value: "" });
+    expect(c.environments[0].variables).toContainEqual({ key: "token", value: "" });
   });
 
   // emptying this one too left a collection that could not authenticate, which
@@ -59,8 +68,7 @@ describe("writing the workspace out", () => {
   it("keeps a header that only refers to a variable", () => {
     const c = toCollection(
       [tab({ headers: [{ key: "Authorization", value: "Bearer {{token}}", enabled: true }] })],
-      [],
-      "",
+      oneEnv(),
       "x"
     );
     expect(c.requests[0].headers[0].value).toBe("Bearer {{token}}");
@@ -69,26 +77,44 @@ describe("writing the workspace out", () => {
   it("turns a password in a login body into a placeholder, and says it needs one", () => {
     const c = toCollection(
       [tab({ method: "POST", body: '{"email":"a@b.com","password":"hunter2"}' })],
-      [],
-      "",
+      oneEnv(),
       "x"
     );
     expect(JSON.parse(c.requests[0].body)).toEqual({ email: "a@b.com", password: "{{password}}" });
-    expect(c.variables).toContainEqual({ key: "password", value: "" });
+    expect(c.environments[0].variables).toContainEqual({ key: "password", value: "" });
   });
 
   it("leaves a body alone when it holds nothing sensitive", () => {
-    const c = toCollection([tab({ method: "POST", body: '{"title":"Database down"}' })], [], "", "x");
+    const c = toCollection([tab({ method: "POST", body: '{"title":"Database down"}' })], oneEnv(), "x");
     expect(JSON.parse(c.requests[0].body)).toEqual({ title: "Database down" });
-    expect(c.variables).toEqual([]);
+    expect(c.environments[0].variables).toEqual([]);
   });
 
   it("writes a credential variable out empty too", () => {
-    const c = toCollection([tab()], [{ key: "token", value: "jwt" }, { key: "page", value: "2" }], "", "x");
-    expect(c.variables).toEqual([
+    const c = toCollection(
+      [tab()],
+      oneEnv([{ key: "token", value: "jwt" }, { key: "page", value: "2" }]),
+      "x"
+    );
+    expect(c.environments[0].variables).toEqual([
       { key: "token", value: "" },
       { key: "page", value: "2" },
     ]);
+  });
+
+  // an environment a developer switches to later must not be the one where a
+  // placeholder a header or body needs is silently missing
+  it("declares a name every environment needs, not only the one active when the file was written", () => {
+    const c = toCollection(
+      [tab({ headers: [{ key: "Authorization", value: "Bearer real-token", enabled: true }] })],
+      [
+        { name: "Local", variables: [] },
+        { name: "Staging", variables: [] },
+      ],
+      "x"
+    );
+    expect(c.environments[0].variables).toContainEqual({ key: "token", value: "" });
+    expect(c.environments[1].variables).toContainEqual({ key: "token", value: "" });
   });
 
   it("carries the assertions and the captures, without their results", () => {
@@ -99,8 +125,7 @@ describe("writing the workspace out", () => {
           captures: [{ id: "b", from: "data.id", name: "incidentId", lastValue: "inc-1" }],
         }),
       ],
-      [],
-      "",
+      oneEnv(),
       "x"
     );
     expect(c.requests[0].tests).toEqual([{ field: "status", operator: "equals", value: "200" }]);
@@ -108,11 +133,11 @@ describe("writing the workspace out", () => {
   });
 
   it("leaves out a tab that was opened and never filled in", () => {
-    expect(toCollection([tab({ url: "  " })], [], "", "x").requests).toHaveLength(0);
+    expect(toCollection([tab({ url: "  " })], oneEnv(), "x").requests).toHaveLength(0);
   });
 
   it("serialises as json a person can read and a diff can show", () => {
-    const text = serialise(toCollection([tab()], [], "", "x"));
+    const text = serialise(toCollection([tab()], oneEnv(), "x"));
     expect(text.endsWith("\n")).toBe(true);
     expect(JSON.parse(text).requests).toHaveLength(1);
   });
@@ -122,18 +147,45 @@ describe("reading one back", () => {
   it("round trips what the app wrote", () => {
     const written = toCollection(
       [tab({ captures: [{ id: "c", from: "token", name: "token", lastValue: null }] })],
-      [{ key: "page", value: "2" }],
-      "http://localhost:3001",
+      oneEnv([{ key: "page", value: "2" }, { key: "BASE_URL", value: "http://localhost:3001" }]),
       "demo"
     );
     const back = fromCollection(JSON.parse(serialise(written)))!;
     expect(back.name).toBe("demo");
-    expect(back.baseUrl).toBe("http://localhost:3001");
-    expect(back.variables).toEqual([{ key: "page", value: "2" }]);
+    expect(back.environments).toEqual(
+      oneEnv([{ key: "page", value: "2" }, { key: "BASE_URL", value: "http://localhost:3001" }])
+    );
     expect(back.tabs).toHaveLength(1);
     expect(back.tabs[0].url).toBe("http://localhost:3001/api/incidents");
     expect(back.tabs[0].captures).toEqual([
       expect.objectContaining({ from: "token", name: "token", lastValue: null }),
+    ]);
+  });
+
+  // a file written before environments existed has a flat baseUrl and
+  // variables instead — it keeps loading, folded into one implied environment
+  it("folds a v1 file's flat baseUrl and variables into one Local environment", () => {
+    const back = fromCollection({
+      requests: [{ url: "http://localhost/api" }],
+      baseUrl: "http://localhost:3001",
+      variables: [{ key: "page", value: "2" }],
+    })!;
+    expect(back.environments).toEqual(
+      oneEnv([{ key: "page", value: "2" }, { key: "BASE_URL", value: "http://localhost:3001" }])
+    );
+  });
+
+  it("reads a v2 file's own named environments as they are", () => {
+    const back = fromCollection({
+      requests: [{ url: "http://a" }],
+      environments: [
+        { name: "Local", variables: [{ key: "BASE_URL", value: "http://localhost:3001" }] },
+        { name: "Staging", variables: [{ key: "BASE_URL", value: "https://staging.example.com" }] },
+      ],
+    })!;
+    expect(back.environments.map((e) => e.name)).toEqual(["Local", "Staging"]);
+    expect(back.environments[1].variables).toEqual([
+      { key: "BASE_URL", value: "https://staging.example.com" },
     ]);
   });
 

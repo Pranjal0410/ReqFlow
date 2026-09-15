@@ -17,7 +17,7 @@ import { RequestTab, TestCase } from "../types";
 import { Capture } from "./capture";
 import { Variable, isSecretVariable, isSecretHeader } from "./variables";
 
-export const FORMAT = 1;
+export const FORMAT = 2;
 
 export interface CollectionRequest {
   name: string;
@@ -30,11 +30,20 @@ export interface CollectionRequest {
   captures: { from: string; name: string }[];
 }
 
+// Local, Development, Staging — the same requests, pointed somewhere different.
+// BASE_URL is not a field of its own: it is a variable named BASE_URL like any
+// other, so switching environments is exactly the substitution every other
+// {{name}} already goes through, in the app and in the CLI, rather than a
+// second resolution mechanism next to it.
+export interface Environment {
+  name: string;
+  variables: { key: string; value: string }[];
+}
+
 export interface Collection {
   reqflow: number;
   name: string;
-  baseUrl: string;
-  variables: { key: string; value: string }[];
+  environments: Environment[];
   requests: CollectionRequest[];
 }
 
@@ -133,8 +142,7 @@ export function bodyForFile(body: string): { body: string; needs: string[] } {
 
 export function toCollection(
   tabs: RequestTab[],
-  variables: Variable[],
-  baseUrl: string,
+  environments: Environment[],
   name: string
 ): Collection {
   // names the file now refers to but cannot carry a value for, listed as empty
@@ -171,23 +179,30 @@ export function toCollection(
     };
   });
 
-  const declared = (variables || [])
-    .filter((v) => v.key && v.key.trim())
-    .map((v) => ({
-      key: v.key.trim(),
-      // the token from a login is exactly what this must not carry
-      value: isSecretVariable(v.key) ? "" : v.value || "",
-    }));
+  // a header or body needs a name in every environment, not only the one that
+  // happened to be active when the file was written — an environment a
+  // developer switches to later must not be the one where the placeholder is
+  // silently missing
+  const declaredEnvironments = (environments || []).map((env) => {
+    const declared = (env.variables || [])
+      .filter((v) => v.key && v.key.trim())
+      .map((v) => ({
+        key: v.key.trim(),
+        // the token from a login is exactly what this must not carry
+        value: isSecretVariable(v.key) ? "" : v.value || "",
+      }));
 
-  for (const n of needed) {
-    if (!declared.some((v) => v.key === n)) declared.push({ key: n, value: "" });
-  }
+    for (const n of needed) {
+      if (!declared.some((v) => v.key === n)) declared.push({ key: n, value: "" });
+    }
+
+    return { name: env.name || "environment", variables: declared };
+  });
 
   return {
     reqflow: FORMAT,
     name: name || "workspace",
-    baseUrl: baseUrl || "",
-    variables: declared,
+    environments: declaredEnvironments,
     requests,
   };
 }
@@ -202,8 +217,7 @@ function id(): string {
 
 export interface Imported {
   name: string;
-  baseUrl: string;
-  variables: Variable[];
+  environments: Environment[];
   tabs: RequestTab[];
 }
 
@@ -274,16 +288,36 @@ export function fromCollection(raw: any): Imported | null {
 
   if (tabs.length === 0) return null;
 
-  const variables: Variable[] = Array.isArray(raw.variables)
-    ? raw.variables
-        .filter((v: any) => v && String(v.key ?? "").trim())
-        .map((v: any) => ({ key: String(v.key).trim(), value: String(v.value ?? "") }))
-    : [];
+  const readVariables = (raw: any): Variable[] =>
+    Array.isArray(raw)
+      ? raw
+          .filter((v: any) => v && String(v.key ?? "").trim())
+          .map((v: any) => ({ key: String(v.key).trim(), value: String(v.value ?? "") }))
+      : [];
+
+  // a v2 file names its environments. a v1 file has one implied environment —
+  // its own flat baseUrl and variables — so it keeps loading with nothing for
+  // anyone to do, and BASE_URL joins the variables the same way it would if
+  // the file had been written by this version from the start.
+  const environments: Environment[] =
+    Array.isArray(raw.environments) && raw.environments.length > 0
+      ? raw.environments.map((e: any) => ({
+          name: String(e?.name ?? "environment"),
+          variables: readVariables(e?.variables),
+        }))
+      : [
+          {
+            name: "Local",
+            variables: [
+              ...readVariables(raw.variables),
+              ...(raw.baseUrl ? [{ key: "BASE_URL", value: String(raw.baseUrl) }] : []),
+            ],
+          },
+        ];
 
   return {
     name: String(raw.name ?? "workspace"),
-    baseUrl: String(raw.baseUrl ?? ""),
-    variables,
+    environments,
     tabs,
   };
 }

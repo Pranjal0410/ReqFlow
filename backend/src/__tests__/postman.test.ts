@@ -1,4 +1,10 @@
-import { buildPostmanCollection, buildPostmanEnvironment, buildPostmanUrl } from "../services/postman";
+import {
+  buildPostmanCollection,
+  buildPostmanEnvironment,
+  buildPostmanUrl,
+  parsePostmanCollection,
+  parsePostmanEnvironment,
+} from "../services/postman";
 
 describe("buildPostmanCollection", () => {
   it("names the collection and points at the v2.1 schema", () => {
@@ -120,5 +126,97 @@ describe("buildPostmanEnvironment", () => {
       { key: "BASE_URL", value: "http://localhost:4000", type: "default", enabled: true },
       { key: "token", value: "", type: "default", enabled: true },
     ]);
+  });
+});
+
+describe("parsePostmanCollection", () => {
+  it("reads a flat request into ReqFlow's shape, disabled flipped back to enabled", () => {
+    const out = parsePostmanCollection({
+      item: [
+        {
+          name: "get users",
+          request: {
+            method: "get",
+            header: [
+              { key: "Authorization", value: "Bearer {{token}}", disabled: false },
+              { key: "X-Debug", value: "1", disabled: true },
+            ],
+            url: { raw: "{{BASE_URL}}/users", host: ["{{BASE_URL}}"], path: ["users"] },
+          },
+        },
+      ],
+    });
+    expect(out).toEqual([
+      {
+        name: "get users",
+        method: "GET",
+        url: "{{BASE_URL}}/users",
+        headers: [
+          { key: "Authorization", value: "Bearer {{token}}", enabled: true },
+          { key: "X-Debug", value: "1", enabled: false },
+        ],
+        body: "",
+      },
+    ]);
+  });
+
+  it("takes a raw body but leaves other body modes empty rather than dropping the request", () => {
+    const out = parsePostmanCollection({
+      item: [
+        {
+          name: "create",
+          request: {
+            method: "POST",
+            url: "{{BASE_URL}}/x",
+            body: { mode: "raw", raw: '{"a":1}' },
+          },
+        },
+        {
+          name: "upload",
+          request: {
+            method: "POST",
+            url: "{{BASE_URL}}/x",
+            body: { mode: "formdata", formdata: [{ key: "file", type: "file" }] },
+          },
+        },
+      ],
+    });
+    expect(out[0].body).toBe('{"a":1}');
+    expect(out[1].body).toBe("");
+  });
+
+  it("flattens nested folders, prefixing the request name with the folder path", () => {
+    const out = parsePostmanCollection({
+      item: [
+        {
+          name: "Users",
+          item: [{ name: "get", request: { method: "GET", url: "{{BASE_URL}}/users" } }],
+        },
+      ],
+    });
+    expect(out[0].name).toBe("Users/get");
+  });
+
+  it("reads a plain string url as-is", () => {
+    const out = parsePostmanCollection({
+      item: [{ name: "x", request: { method: "GET", url: "http://localhost:4000/x" } }],
+    });
+    expect(out[0].url).toBe("http://localhost:4000/x");
+  });
+});
+
+describe("parsePostmanEnvironment", () => {
+  it("keeps only enabled values, dropping type/id", () => {
+    const out = parsePostmanEnvironment({
+      name: "Staging",
+      values: [
+        { key: "BASE_URL", value: "https://staging.example.com", enabled: true },
+        { key: "old", value: "unused", enabled: false },
+      ],
+    });
+    expect(out).toEqual({
+      name: "Staging",
+      variables: [{ key: "BASE_URL", value: "https://staging.example.com" }],
+    });
   });
 });

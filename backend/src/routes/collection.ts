@@ -10,7 +10,12 @@ import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import { expandHome } from "../services/fileReader";
-import { buildPostmanCollection, buildPostmanEnvironment } from "../services/postman";
+import {
+  buildPostmanCollection,
+  buildPostmanEnvironment,
+  parsePostmanCollection,
+  parsePostmanEnvironment,
+} from "../services/postman";
 
 const router = Router();
 
@@ -85,6 +90,37 @@ router.post("/postman", (req: Request, res: Response) => {
     res.json({
       collection: buildPostmanCollection(collection),
       environments: environments.map(buildPostmanEnvironment),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// The reverse: a Postman collection (and, optionally, the environment(s)
+// exported alongside it), read into the shape fromCollection on the client
+// already knows how to turn into tabs. Kept as JSON in, JSON out rather than a
+// file on disk — the developer pastes what Postman gave them, same as export
+// hands back something to paste into Postman.
+router.post("/postman/import", (req: Request, res: Response) => {
+  const { collection, environments } = req.body || {};
+  if (!collection || typeof collection !== "object" || !Array.isArray(collection.item)) {
+    return res.status(400).json({ error: "collection must be a Postman collection with an item array" });
+  }
+
+  try {
+    const requests = parsePostmanCollection(collection);
+    if (requests.length === 0) {
+      return res.status(400).json({ error: "that collection has no requests in it" });
+    }
+
+    const envList = Array.isArray(environments) ? environments : environments ? [environments] : [];
+
+    res.json({
+      collection: {
+        name: collection.info?.name || "workspace",
+        requests,
+        environments: envList.map(parsePostmanEnvironment),
+      },
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

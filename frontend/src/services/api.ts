@@ -257,6 +257,24 @@ export async function exportPostman(
   return res.data;
 }
 
+// A Postman collection, and optionally the environment(s) exported alongside
+// it, read back into ReqFlow's own shape — the reverse of exportPostman, so a
+// collection built there can be tried here without rebuilding it by hand.
+export async function importPostman(
+  collection: any,
+  environments?: any[]
+): Promise<{ collection: any }> {
+  const res = await withTimeout(
+    axios.post(
+      `${BASE}/collection/postman/import`,
+      { collection, environments },
+      { timeout: TIMEOUTS.quick }
+    ),
+    "the Postman import"
+  );
+  return res.data;
+}
+
 export interface MockInfo {
   id: string;
   port: number;

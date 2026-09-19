@@ -25,6 +25,7 @@ import {
   checkTarget,
   exportOpenApi,
   exportPostman,
+  importPostman,
   startMockServer,
   stopMockServer,
   saveCollection,
@@ -65,7 +66,7 @@ import {
 } from "./src/lib/persist";
 import { toMap, substitute, workspaceAuth } from "./src/lib/variables";
 import { runCaptures, withResults } from "./src/lib/capture";
-import { toCollection, fromCollection, mergeIntoTabs, FILENAME } from "./src/lib/collection";
+import { toCollection, fromCollection, mergeIntoTabs, FILENAME, Imported } from "./src/lib/collection";
 import { withScheme, originOf } from "./src/lib/url";
 import {
   addGenerated,
@@ -1452,6 +1453,40 @@ export default function App() {
     }
   };
 
+  // What onLoadCollection and Postman import both end with: requests folded
+  // into the open tabs, environments folded into the ones already here — the
+  // same merge either way, since by this point both are just an Imported.
+  const applyImported = (read: Imported): string => {
+    const merged = mergeIntoTabs(tabsRef.current, read.tabs);
+    setTabs(merged);
+    const first = merged.find(
+      (t) => t.method === read.tabs[0].method && t.url === read.tabs[0].url
+    );
+    if (first) setActiveTabId(first.id);
+
+    setEnvironments((prev) => {
+      const next = [...prev];
+      for (const loaded of read.environments) {
+        const at = next.findIndex((e) => e.name === loaded.name);
+        if (at >= 0) {
+          const vars = [...next[at].variables];
+          for (const v of loaded.variables) {
+            if (!vars.some((existing) => existing.key === v.key)) vars.push(v);
+          }
+          next[at] = { ...next[at], variables: vars };
+        } else {
+          next.push({
+            id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
+            ...loaded,
+          });
+        }
+      }
+      return next;
+    });
+
+    return `loaded ${read.tabs.length}`;
+  };
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -1485,6 +1520,12 @@ export default function App() {
           onEnvironmentsChange={setEnvironments}
           onExportOpenApi={() => exportOpenApi(routes, projectName, baseUrl)}
           onExportPostman={() => exportPostman(toCollection(tabs, environments, projectName))}
+          onImportPostman={async (postman) => {
+            const { collection } = await importPostman(postman);
+            const read = fromCollection(collection);
+            if (!read) throw new Error("that collection has no requests in it");
+            return applyImported(read);
+          }}
           onStartMock={() =>
             startMockServer(
               tabs.map((t) => ({ method: t.method, url: t.url, sampleResponse: t.response?.data }))
@@ -1509,42 +1550,7 @@ export default function App() {
                   if (!found) return `no ${FILENAME}`;
                   const read = fromCollection(collection);
                   if (!read) return "nothing to load";
-
-                  // a request already open is that tab, brought up to date;
-                  // one that is not becomes a new tab; anything open that the
-                  // file says nothing about is left alone
-                  const merged = mergeIntoTabs(tabsRef.current, read.tabs);
-                  setTabs(merged);
-                  const first = merged.find(
-                    (t) => t.method === read.tabs[0].method && t.url === read.tabs[0].url
-                  );
-                  if (first) setActiveTabId(first.id);
-
-                  // an environment already open by name is brought up to date
-                  // with anything it does not already have; one the file names
-                  // that is not open yet is added. a value already in the
-                  // workspace is the live one — the file's copy of it was
-                  // written empty on purpose.
-                  setEnvironments((prev) => {
-                    const next = [...prev];
-                    for (const loaded of read.environments) {
-                      const at = next.findIndex((e) => e.name === loaded.name);
-                      if (at >= 0) {
-                        const vars = [...next[at].variables];
-                        for (const v of loaded.variables) {
-                          if (!vars.some((existing) => existing.key === v.key)) vars.push(v);
-                        }
-                        next[at] = { ...next[at], variables: vars };
-                      } else {
-                        next.push({
-                          id: `${Date.now()}${Math.random().toString(36).slice(2)}`,
-                          ...loaded,
-                        });
-                      }
-                    }
-                    return next;
-                  });
-                  return `loaded ${read.tabs.length}`;
+                  return applyImported(read);
                 }
               : undefined
           }

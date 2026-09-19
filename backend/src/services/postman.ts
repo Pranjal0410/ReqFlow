@@ -128,3 +128,62 @@ export function buildPostmanEnvironment(env: Environment) {
     _postman_variable_scope: "environment",
   };
 }
+
+// The other direction: a collection built somewhere else, read into ReqFlow's
+// shape. A Postman export nests folders and puts url through a structured
+// object; both collapse here into the same flat list of requests fromCollection
+// already knows how to read, folder name kept only as a prefix so two requests
+// named the same thing in different folders do not collide.
+//
+// Basic on purpose: raw body is the one mode carried over, since it is the one
+// mode ReqFlow's own body editor sends. urlencoded and form-data requests still
+// import as a request with no body, rather than being dropped — the url,
+// method and headers are still worth having.
+function postmanUrlToString(url: any): string {
+  if (typeof url === "string") return url;
+  if (url && typeof url === "object") {
+    if (typeof url.raw === "string" && url.raw) return url.raw;
+    const host = Array.isArray(url.host) ? url.host.join(".") : "";
+    const path = Array.isArray(url.path) ? url.path.join("/") : "";
+    return host ? `${host}/${path}` : path;
+  }
+  return "";
+}
+
+function flattenPostmanItems(items: any[], prefix = ""): CollectionRequest[] {
+  const out: CollectionRequest[] = [];
+  for (const item of items || []) {
+    if (Array.isArray(item?.item)) {
+      out.push(...flattenPostmanItems(item.item, prefix ? `${prefix}/${item.name}` : item.name));
+      continue;
+    }
+    if (!item?.request) continue;
+
+    const req = item.request;
+    const body = req.body && req.body.mode === "raw" && typeof req.body.raw === "string" ? req.body.raw : "";
+
+    out.push({
+      name: prefix ? `${prefix}/${item.name}` : item.name || "request",
+      method: (req.method || "GET").toUpperCase(),
+      url: postmanUrlToString(req.url),
+      headers: (Array.isArray(req.header) ? req.header : [])
+        .filter((h: any) => h && h.key && String(h.key).trim())
+        .map((h: any) => ({ key: h.key, value: h.value || "", enabled: h.disabled !== true })),
+      body,
+    });
+  }
+  return out;
+}
+
+export function parsePostmanCollection(pm: any): CollectionRequest[] {
+  return flattenPostmanItems(Array.isArray(pm?.item) ? pm.item : []);
+}
+
+export function parsePostmanEnvironment(pm: any): Environment {
+  return {
+    name: pm?.name || "environment",
+    variables: (Array.isArray(pm?.values) ? pm.values : [])
+      .filter((v: any) => v && v.key && String(v.key).trim() && v.enabled !== false)
+      .map((v: any) => ({ key: String(v.key), value: String(v.value ?? "") })),
+  };
+}

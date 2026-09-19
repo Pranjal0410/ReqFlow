@@ -42,6 +42,9 @@ interface Props {
   // requests + environments, built the same way as the ReqFlow collection is,
   // then converted to Postman's shapes on the backend
   onExportPostman: () => Promise<{ collection: any; environments: any[] }>;
+  // a Postman collection (parsed from whatever the developer pasted), read
+  // into ReqFlow's own tabs the same way a loaded collection file is
+  onImportPostman: (postman: any) => Promise<string>;
   // stands up a fake server on the requests' own shapes, answering each with
   // its last captured response — undefined once none is running
   onStartMock: () => Promise<{ id: string; port: number }>;
@@ -78,6 +81,7 @@ export default function Sidebar({
   onEnvironmentsChange,
   onExportOpenApi,
   onExportPostman,
+  onImportPostman,
   onStartMock,
   onStopMock,
   onSaveCollection,
@@ -163,6 +167,23 @@ export default function Sidebar({
       setPostmanCopied(err?.response?.data?.error || "Export failed");
     }
     setTimeout(() => setPostmanCopied(null), 2200);
+  };
+
+  const [postmanImportNote, setPostmanImportNote] = React.useState<string | null>(null);
+
+  // whatever is on the clipboard right now — a collection copied from
+  // Postman's own Export, or one this app just wrote for it
+  const importPostmanFromClipboard = async () => {
+    try {
+      const text = await Clipboard.getStringAsync();
+      const parsed = JSON.parse(text);
+      setPostmanImportNote(await onImportPostman(parsed));
+    } catch (err: any) {
+      setPostmanImportNote(
+        err?.response?.data?.error || (err instanceof SyntaxError ? "clipboard is not JSON" : "Import failed")
+      );
+    }
+    setTimeout(() => setPostmanImportNote(null), 2600);
   };
 
   const [mock, setMock] = React.useState<{ id: string; port: number } | null>(null);
@@ -432,6 +453,17 @@ export default function Sidebar({
           onPress={copyPostmanEnvironment}
         >
           <Text style={styles.exportText}>Copy Postman env</Text>
+        </Pressable>
+      </View>
+
+      {/* the same direction reversed — a collection copied out of Postman,
+          pasted back in as tabs */}
+      <View style={styles.collectionRow}>
+        <Pressable
+          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+          onPress={importPostmanFromClipboard}
+        >
+          <Text style={styles.exportText}>{postmanImportNote || "Import Postman from clipboard"}</Text>
         </Pressable>
       </View>
 

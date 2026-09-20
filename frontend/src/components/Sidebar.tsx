@@ -139,7 +139,7 @@ export default function Sidebar({
     try {
       setCollectionNote(await run());
     } catch (err: any) {
-      setCollectionNote(err?.message ? "failed" : "failed");
+      setCollectionNote(err?.message || "failed");
     }
     setTimeout(() => setCollectionNote(null), 2600);
   };

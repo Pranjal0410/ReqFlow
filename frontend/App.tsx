@@ -177,6 +177,40 @@ function initialEnvironments(): StoredEnvironment[] {
   }));
 }
 
+// Choosing a folder in a real dialog is the act that grants a sandboxed macOS
+// app access to it — the same fact both Apply and Save Collection run into
+// when the backend was never given the project folder, or was given it in a
+// process that has since restarted. Shared here since both writers meet the
+// same refusal and recover from it the same way.
+type RegrantResult =
+  | { status: "granted" }
+  | { status: "cancelled" }
+  | { status: "unavailable"; message: string }
+  | { status: "mismatch"; message: string };
+
+async function chooseAndVerifyFolder(targetPath: string): Promise<RegrantResult> {
+  const desktop = (globalThis as any).reqflowDesktop;
+  if (typeof desktop?.chooseProjectFolder !== "function") {
+    return { status: "unavailable", message: "Choosing a folder is only available in the desktop app." };
+  }
+
+  const chosen = await desktop.chooseProjectFolder().catch(() => null);
+  if (!chosen) return { status: "cancelled" };
+
+  // Choosing a different folder grants that one, not this project. Saying so
+  // is better than retrying and failing again for a reason that now looks
+  // like the first one.
+  const grantsTarget = targetPath === chosen || targetPath.startsWith(`${chosen}/`);
+  if (!grantsTarget) {
+    return {
+      status: "mismatch",
+      message: `That grants access to ${chosen}, which does not contain this project. Choose ${targetPath} itself, or a folder above it.`,
+    };
+  }
+
+  return { status: "granted" };
+}
+
 export default function App() {
   const [routes, setRoutes] = useState<DetectedRoute[]>([]);
   const [tabs, setTabs] = useState<RequestTab[]>([createTab()]);
@@ -292,21 +326,10 @@ export default function App() {
   // that Scan Project performs, offered where the refusal happened so the
   // developer does not have to go back and start again.
   const regrantAndRetry = async () => {
-    const desktop = (globalThis as any).reqflowDesktop;
-    if (typeof desktop?.chooseProjectFolder !== "function") return;
-
-    const chosen = await desktop.chooseProjectFolder().catch(() => null);
-    if (!chosen) return;
-
-    // Choosing a different folder grants that one, not this project. Saying so
-    // is better than retrying and failing again for a reason that now looks
-    // like the first one.
-    const grantsThisProject = stylePath === chosen || (stylePath || "").startsWith(`${chosen}/`);
-    if (!grantsThisProject) {
-      setApplyError({
-        message: `That grants access to ${chosen}, which does not contain this project. Choose ${stylePath} itself, or a folder above it.`,
-        recoverable: true,
-      });
+    const result = await chooseAndVerifyFolder(stylePath || "");
+    if (result.status === "cancelled" || result.status === "unavailable") return;
+    if (result.status === "mismatch") {
+      setApplyError({ message: result.message, recoverable: true });
       return;
     }
 
@@ -1535,11 +1558,27 @@ export default function App() {
           onSaveCollection={
             projectPath
               ? async () => {
-                  const { path } = await saveCollection(
-                    projectPath,
-                    toCollection(tabs, environments, projectName)
-                  );
-                  return `saved to ${path.split("/").pop()}`;
+                  const write = async () => {
+                    const { path } = await saveCollection(
+                      projectPath,
+                      toCollection(tabs, environments, projectName)
+                    );
+                    return `saved to ${path.split("/").pop()}`;
+                  };
+
+                  try {
+                    return await write();
+                  } catch (err: any) {
+                    if (err?.response?.data?.code !== "ACCESS_DENIED") throw err;
+
+                    // the same refusal Apply meets, recovered the same way:
+                    // choosing the folder in a real dialog is what grants
+                    // access to it again
+                    const result = await chooseAndVerifyFolder(projectPath);
+                    if (result.status === "cancelled") return "not saved — access not granted";
+                    if (result.status !== "granted") throw new Error(result.message);
+                    return await write();
+                  }
                 }
               : undefined
           }

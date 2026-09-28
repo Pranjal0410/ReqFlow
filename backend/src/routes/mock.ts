@@ -31,13 +31,13 @@ router.post("/", async (req: Request, res: Response) => {
 });
 
 router.get("/:id", (req: Request, res: Response) => {
-  const status = mockStatus(req.params.id);
+  const status = mockStatus(String(req.params.id));
   if (!status) return res.status(404).json({ error: "no mock server with that id" });
   res.json(status);
 });
 
 router.delete("/:id", (req: Request, res: Response) => {
-  if (!stopMock(req.params.id)) return res.status(404).json({ error: "no mock server with that id" });
+  if (!stopMock(String(req.params.id))) return res.status(404).json({ error: "no mock server with that id" });
   res.json({ stopped: true });
 });
 

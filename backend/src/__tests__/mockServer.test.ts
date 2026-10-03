@@ -1,5 +1,5 @@
 import http from "http";
-import { startMock, stopMock, mockStatus } from "../services/mockServer";
+import { startMock, stopMock, mockStatus, listMocks } from "../services/mockServer";
 
 function get(port: number, path: string, method = "GET"): Promise<{ status: number; body: any }> {
   return new Promise((resolve, reject) => {
@@ -41,5 +41,18 @@ describe("mock server", () => {
     expect(mockStatus(id)).toEqual({ running: true, port, routes: [{ method: "GET", path: "/x" }] });
     stopMock(id);
     expect(mockStatus(id)).toBeNull();
+  });
+
+  it("lists every mock still running, for a frontend that lost track of its own", async () => {
+    const a = await startMock([{ method: "GET", path: "/a" }]);
+    const b = await startMock([{ method: "GET", path: "/b" }]);
+    try {
+      const ids = listMocks().map((m) => m.id);
+      expect(ids).toEqual(expect.arrayContaining([a.id, b.id]));
+    } finally {
+      stopMock(a.id);
+      stopMock(b.id);
+    }
+    expect(listMocks().map((m) => m.id)).not.toEqual(expect.arrayContaining([a.id, b.id]));
   });
 });

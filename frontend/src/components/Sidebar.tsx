@@ -49,6 +49,9 @@ interface Props {
   // its last captured response — undefined once none is running
   onStartMock: () => Promise<{ id: string; port: number }>;
   onStopMock: (id: string) => Promise<void>;
+  // what is still up on the backend, which outlives a reload of this page —
+  // how a mock started before a refresh is found again rather than orphaned
+  onListMocks: () => Promise<{ id: string; port: number }[]>;
   // absent until a project is open: there is nowhere to put the file before then
   onSaveCollection?: () => Promise<string>;
   onLoadCollection?: () => Promise<string>;
@@ -84,6 +87,7 @@ export default function Sidebar({
   onImportPostman,
   onStartMock,
   onStopMock,
+  onListMocks,
   onSaveCollection,
   onLoadCollection,
   generatedRoutes,
@@ -188,6 +192,27 @@ export default function Sidebar({
 
   const [mock, setMock] = React.useState<{ id: string; port: number } | null>(null);
   const [mockError, setMockError] = React.useState<string | null>(null);
+
+  // A mock outlives the page that started it — the backend keeps it running
+  // through a reload. Without this, that mock has no Stop button left
+  // anywhere and starting another leaks a second one alongside it. The last
+  // one found is adopted as the one this session can stop; any earlier ones
+  // are cleaned up rather than left running forever.
+  React.useEffect(() => {
+    let cancelled = false;
+    onListMocks()
+      .then((all) => {
+        if (cancelled || all.length === 0) return;
+        const survivor = all[all.length - 1];
+        setMock(survivor);
+        all.slice(0, -1).forEach((m) => onStopMock(m.id).catch(() => {}));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const toggleMock = async () => {
     setMockError(null);

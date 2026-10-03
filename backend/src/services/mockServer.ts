@@ -81,6 +81,12 @@ export function stopMock(id: string): boolean {
   return true;
 }
 
+// every mock still up, for a frontend that reloaded and lost track of the one
+// it started — the process this runs in is the only place that still knows
+export function listMocks(): MockInfo[] {
+  return Array.from(running.entries()).map(([id, entry]) => ({ id, port: entry.port }));
+}
+
 export function mockStatus(id: string): { running: boolean; port: number; routes: MockRoute[] } | null {
   const entry = running.get(id);
   if (!entry) return null;

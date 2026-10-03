@@ -298,6 +298,15 @@ export async function stopMockServer(id: string): Promise<void> {
   await withTimeout(axios.delete(`${BASE}/mock/${id}`, { timeout: TIMEOUTS.quick }), "the mock server to stop");
 }
 
+// Every mock still up on the backend — which outlives a page reload, so this
+// is how the sidebar finds one it started before and lost track of, rather
+// than leaving it running forever with no way back to it but restarting the
+// backend.
+export async function listMockServers(): Promise<MockInfo[]> {
+  const res = await withTimeout(axios.get(`${BASE}/mock`, { timeout: TIMEOUTS.quick }), "the running mocks");
+  return res.data.running || [];
+}
+
 // The workspace as a file beside the code it tests. Written by the backend
 // rather than downloaded, because a file in the project is what can be
 // committed, reviewed, and run by `reqflow run` without the app.

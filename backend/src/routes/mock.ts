@@ -3,7 +3,7 @@
 // the app can check status or stop it later.
 
 import { Router, Request, Response } from "express";
-import { startMock, stopMock, mockStatus, MockRoute } from "../services/mockServer";
+import { startMock, stopMock, mockStatus, listMocks, MockRoute } from "../services/mockServer";
 
 const router = Router();
 
@@ -28,6 +28,12 @@ router.post("/", async (req: Request, res: Response) => {
   }));
 
   res.json(await startMock(routes));
+});
+
+// what a reloaded frontend lost track of — this process is the only place
+// still holding it, so it is the only place that can answer
+router.get("/", (_req: Request, res: Response) => {
+  res.json({ running: listMocks() });
 });
 
 router.get("/:id", (req: Request, res: Response) => {

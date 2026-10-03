@@ -28,6 +28,7 @@ import {
   importPostman,
   startMockServer,
   stopMockServer,
+  listMockServers,
   saveCollection,
   loadCollection,
   checkModel,
@@ -1575,6 +1576,7 @@ export default function App() {
               mockRedirect.current = null;
             }
           }}
+          onListMocks={listMockServers}
           onSaveCollection={
             projectPath
               ? async () => {

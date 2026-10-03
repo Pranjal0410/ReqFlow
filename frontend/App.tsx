@@ -238,10 +238,14 @@ export default function App() {
   // actually happened, not meant to move with the environment later
   const baseUrl = vars.BASE_URL || "";
 
-  const setEnvironmentVariable = (name: string, value: string) => {
+  // what BASE_URL pointed at, and where, right before the mock server
+  // redirected it — so stopping the mock can put it back
+  const mockRedirect = React.useRef<{ envId: string; previousBaseUrl: string } | null>(null);
+
+  const setEnvironmentVariable = (name: string, value: string, envId: string = activeEnvironmentId) => {
     setEnvironments((prev) =>
       prev.map((env) => {
-        if (env.id !== activeEnvironmentId) return env;
+        if (env.id !== envId) return env;
         const at = env.variables.findIndex((v) => v.key === name);
         const variables = [...env.variables];
         if (at >= 0) variables[at] = { key: name, value };
@@ -1549,12 +1553,28 @@ export default function App() {
             if (!read) throw new Error("that collection has no requests in it");
             return applyImported(read);
           }}
-          onStartMock={() =>
-            startMockServer(
+          // Starting the mock is the answer to "the real server is not
+          // running" only if BASE_URL actually points at it afterwards — so
+          // the active environment's BASE_URL is redirected here, and put back
+          // to what it was pointing at when the mock stops. The environment
+          // it touched is remembered by id rather than assumed to still be
+          // active, in case the developer switches environments while the
+          // mock is running.
+          onStartMock={async () => {
+            const info = await startMockServer(
               tabs.map((t) => ({ method: t.method, url: t.url, sampleResponse: t.response?.data }))
-            )
-          }
-          onStopMock={stopMockServer}
+            );
+            mockRedirect.current = { envId: activeEnvironmentId, previousBaseUrl: baseUrl };
+            setEnvironmentVariable("BASE_URL", `http://127.0.0.1:${info.port}`, activeEnvironmentId);
+            return info;
+          }}
+          onStopMock={async (id) => {
+            await stopMockServer(id);
+            if (mockRedirect.current) {
+              setEnvironmentVariable("BASE_URL", mockRedirect.current.previousBaseUrl, mockRedirect.current.envId);
+              mockRedirect.current = null;
+            }
+          }}
           onSaveCollection={
             projectPath
               ? async () => {

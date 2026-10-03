@@ -468,14 +468,16 @@ export default function Sidebar({
       </View>
 
       {/* a fake server on these requests' own shapes, for building against
-          before the real one answers — or without hitting it at all */}
+          before the real one answers — or without hitting it at all. starting
+          it points BASE_URL here too, so Send works with no real server
+          running; stopping it puts BASE_URL back */}
       <View style={styles.collectionRow}>
         <Pressable
           style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
           onPress={toggleMock}
         >
           <Text style={styles.exportText}>
-            {mock ? `Stop mock (:${mock.port})` : mockError || "Start mock server"}
+            {mock ? `Stop mock — BASE_URL is :${mock.port}` : mockError || "Test without a server (start mock)"}
           </Text>
         </Pressable>
       </View>

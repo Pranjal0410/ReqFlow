@@ -7,12 +7,28 @@ import { startMock, stopMock, mockStatus, listMocks, MockRoute } from "../servic
 
 const router = Router();
 
-// {{BASE_URL}}/users/:id and query strings mean nothing to a server matching
-// on the path it was actually asked for — strip both down to /users/:id
-function toPath(url: string): string {
-  const withoutBase = (url || "").replace(/^\{\{BASE_URL\}\}/, "");
-  const withoutQuery = withoutBase.split("?")[0];
-  return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
+// {{BASE_URL}}/users/:id, http://localhost:3001/users/:id, and query strings
+// all mean nothing to a server matching on the path it was actually asked
+// for — a project scanned before an environment existed still has the
+// literal origin on every request, and that has to collapse to /users/:id
+// exactly the way {{BASE_URL}} does, or nothing matches once a real request
+// arrives with only the path.
+export function toPath(url: string): string {
+  const text = (url || "").trim();
+
+  if (text.startsWith("{{BASE_URL}}")) {
+    const rest = text.slice("{{BASE_URL}}".length).split("?")[0];
+    return rest.startsWith("/") ? rest : `/${rest}`;
+  }
+
+  try {
+    return new URL(text).pathname;
+  } catch {
+    // not absolute — already a bare path, or has neither a placeholder nor a
+    // scheme to parse
+    const withoutQuery = text.split("?")[0];
+    return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
+  }
 }
 
 router.post("/", async (req: Request, res: Response) => {

@@ -221,6 +221,11 @@ export default function App() {
   const [showAiAgent, setShowAiAgent] = useState(true);
   const [projectName, setProjectName] = useState("ReqFlow");
   const [error, setError] = useState<string | null>(null);
+  // a bulk import lands new tabs wherever mergeIntoTabs puts them in an
+  // already-open, already-scrolling tab bar — not obviously "the ones that
+  // just appeared". this says what happened and names them, since the tab
+  // bar alone does not.
+  const [notice, setNotice] = useState<string | null>(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   // Local, Development, Staging — the same requests, pointed somewhere
   // different. BASE_URL lives inside each one's variables like any other
@@ -1512,6 +1517,18 @@ export default function App() {
       return next;
     });
 
+    // names them rather than just counting them, and says which one is now
+    // open — the tab bar scrolls to that one on its own, but only once the
+    // developer knows what to look for in a row that may already be full of
+    // tabs
+    const names = read.tabs.map((t) => t.label || `${t.method} ${t.url}`);
+    const shown = names.slice(0, 4).join(", ") + (names.length > 4 ? `, +${names.length - 4} more` : "");
+    setNotice(
+      read.tabs.length === 1
+        ? `Opened "${names[0]}"`
+        : `Loaded ${read.tabs.length} requests (${shown}) — opened "${names[0]}"`
+    );
+
     return `loaded ${read.tabs.length}`;
   };
 
@@ -1726,6 +1743,12 @@ export default function App() {
       />
 
       <Toast message={showScan ? null : error} onDismiss={() => setError(null)} />
+      <Toast
+        kind="success"
+        bottom={error ? 76 : 20}
+        message={showScan ? null : notice}
+        onDismiss={() => setNotice(null)}
+      />
 
       <RunDetail
         run={openRun}

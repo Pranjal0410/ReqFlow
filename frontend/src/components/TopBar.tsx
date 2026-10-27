@@ -12,6 +12,11 @@ interface Props {
   target: string | null;
   // true up, false unreachable, null not checked yet or no target
   targetUp: boolean | null;
+  // set while the mock server is running and BASE_URL points at it — shown
+  // instead of the ordinary reachability badge, since "Running 127.0.0.1:port"
+  // reads exactly like a real server came up, which is the one thing sending
+  // a request without one should never suggest
+  mockPort: number | null;
   // how many standing rules are switched on. shown as a number rather than a
   // dot, because "the agent is following three rules you cannot see from here"
   // is the thing worth knowing at a glance.
@@ -25,6 +30,7 @@ export default function TopBar({
   routeCount,
   target,
   targetUp,
+  mockPort,
   instructionCount,
   onOpenInstructions,
   onOpenSettings,
@@ -34,7 +40,9 @@ export default function TopBar({
   // identical to the address that works.
   const host = target ? target.replace(/^http:\/\//, "") : null;
 
-  const state = !host
+  const state = mockPort
+    ? { color: colors.statusOk, tint: "rgba(74, 222, 128, 0.12)", label: `Mock server running :${mockPort}` }
+    : !host
     ? { color: colors.textDim, tint: "rgba(255,255,255,0.06)", label: "No target" }
     : targetUp === null
     ? { color: colors.textDim, tint: "rgba(255,255,255,0.06)", label: `Checking ${host}` }

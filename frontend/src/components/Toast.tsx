@@ -7,11 +7,22 @@ import Icon from "./Icon";
 interface Props {
   message: string | null;
   onDismiss: () => void;
+  // error is the default because that is the only thing this carried until a
+  // bulk import needed to say what it did — "loaded 4" in a sidebar button
+  // that reverts to its own label in under 3 seconds said nothing about
+  // where those 4 requests actually went, and the tab bar gives no other
+  // sign a new tab was not already sitting there.
+  kind?: "error" | "success";
+  // an error and a success notice are different states and rarely coincide,
+  // but both default to the same spot — this lets a second instance sit
+  // above the first rather than exactly on top of it on the rare tick both
+  // are up
+  bottom?: number;
 }
 
 // scan and request failures used to go only to console.error, so a failed
 // scan looked identical to nothing happening. this surfaces them.
-export default function Toast({ message, onDismiss }: Props) {
+export default function Toast({ message, onDismiss, kind = "error", bottom }: Props) {
   const slide = React.useRef(new Animated.Value(0)).current;
 
   React.useEffect(() => {
@@ -37,6 +48,7 @@ export default function Toast({ message, onDismiss }: Props) {
     <Animated.View
       style={[
         styles.wrap,
+        bottom !== undefined && { bottom },
         {
           opacity: slide,
           transform: [
@@ -45,9 +57,13 @@ export default function Toast({ message, onDismiss }: Props) {
         },
       ]}
     >
-      <View style={styles.toast}>
+      <View style={[styles.toast, kind === "success" && styles.toastSuccess]}>
         <View style={styles.iconWrap}>
-          <Icon name="alert" size={16} color={colors.statusErr} />
+          {kind === "success" ? (
+            <Icon name="check" size={16} color={colors.statusOk} />
+          ) : (
+            <Icon name="alert" size={16} color={colors.statusErr} />
+          )}
         </View>
         <Text style={styles.text} numberOfLines={4}>
           {message}
@@ -85,6 +101,9 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 14,
     ...shadow.md,
+  },
+  toastSuccess: {
+    borderLeftColor: colors.statusOk,
   },
   iconWrap: {
     marginTop: 1,

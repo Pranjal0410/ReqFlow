@@ -226,6 +226,12 @@ export default function App() {
   // just appeared". this says what happened and names them, since the tab
   // bar alone does not.
   const [notice, setNotice] = useState<string | null>(null);
+  // what the toast above says, kept around in the sidebar so it is still
+  // there after the toast is gone — dismissed explicitly, or replaced by the
+  // next import
+  const [lastImported, setLastImported] = useState<
+    { id: string; method: string; label: string }[] | null
+  >(null);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   // Local, Development, Staging — the same requests, pointed somewhere
   // different. BASE_URL lives inside each one's variables like any other
@@ -247,6 +253,11 @@ export default function App() {
   // what BASE_URL pointed at, and where, right before the mock server
   // redirected it — so stopping the mock can put it back
   const mockRedirect = React.useRef<{ envId: string; previousBaseUrl: string } | null>(null);
+  // the sidebar owns starting, stopping and reconciling the mock after a
+  // reload; this is only a copy of its answer, for the top bar's badge —
+  // "Running 127.0.0.1:53748" reads exactly like a real server came up, and
+  // that is the one thing sending a request without one should never suggest
+  const [mockStatus, setMockStatus] = useState<{ id: string; port: number } | null>(null);
 
   const setEnvironmentVariable = (name: string, value: string, envId: string = activeEnvironmentId) => {
     setEnvironments((prev) =>
@@ -1529,6 +1540,15 @@ export default function App() {
         : `Loaded ${read.tabs.length} requests (${shown}) — opened "${names[0]}"`
     );
 
+    // stays in the sidebar until dismissed or the next import replaces it —
+    // the toast above says the same thing but is gone in 8 seconds
+    setLastImported(
+      read.tabs.map((rt) => {
+        const match = merged.find((t) => t.method === rt.method && t.url === rt.url);
+        return { id: match?.id || rt.id, method: rt.method, label: rt.label || `${rt.method} ${rt.url}` };
+      })
+    );
+
     return `loaded ${read.tabs.length}`;
   };
 
@@ -1541,6 +1561,7 @@ export default function App() {
         routeCount={routes.length}
         target={target}
         targetUp={targetUp}
+        mockPort={mockStatus?.port ?? null}
         instructionCount={activeInstructions.length}
         onOpenInstructions={() => setShowInstructions(true)}
         onOpenSettings={() => setShowSettings(true)}
@@ -1571,6 +1592,9 @@ export default function App() {
             if (!read) throw new Error("that collection has no requests in it");
             return applyImported(read);
           }}
+          lastImported={lastImported}
+          onSelectImportedTab={setActiveTabId}
+          onDismissImported={() => setLastImported(null)}
           // Starting the mock is the answer to "the real server is not
           // running" only if BASE_URL actually points at it afterwards — so
           // the active environment's BASE_URL is redirected here, and put back
@@ -1594,6 +1618,7 @@ export default function App() {
             }
           }}
           onListMocks={listMockServers}
+          onMockStatusChange={setMockStatus}
           onSaveCollection={
             projectPath
               ? async () => {

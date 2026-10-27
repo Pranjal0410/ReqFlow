@@ -45,6 +45,12 @@ interface Props {
   // a Postman collection (parsed from whatever the developer pasted), read
   // into ReqFlow's own tabs the same way a loaded collection file is
   onImportPostman: (postman: any) => Promise<string>;
+  // what the last import (Postman or Load) actually brought in — named, and
+  // clickable to the tab it opened, rather than only a toast that is gone in
+  // 8 seconds and a tab bar that gives no other sign of what changed
+  lastImported: { id: string; method: string; label: string }[] | null;
+  onSelectImportedTab: (id: string) => void;
+  onDismissImported: () => void;
   // stands up a fake server on the requests' own shapes, answering each with
   // its last captured response — undefined once none is running
   onStartMock: () => Promise<{ id: string; port: number }>;
@@ -52,6 +58,10 @@ interface Props {
   // what is still up on the backend, which outlives a reload of this page —
   // how a mock started before a refresh is found again rather than orphaned
   onListMocks: () => Promise<{ id: string; port: number }[]>;
+  // told whenever the mock this sidebar knows about changes — started,
+  // stopped, or adopted after a reload — so the top bar's badge can say
+  // "mock" instead of reading like a real server came up
+  onMockStatusChange?: (mock: { id: string; port: number } | null) => void;
   // absent until a project is open: there is nowhere to put the file before then
   onSaveCollection?: () => Promise<string>;
   onLoadCollection?: () => Promise<string>;
@@ -85,9 +95,13 @@ export default function Sidebar({
   onExportOpenApi,
   onExportPostman,
   onImportPostman,
+  lastImported,
+  onSelectImportedTab,
+  onDismissImported,
   onStartMock,
   onStopMock,
   onListMocks,
+  onMockStatusChange,
   onSaveCollection,
   onLoadCollection,
   generatedRoutes,
@@ -193,6 +207,13 @@ export default function Sidebar({
   const [mock, setMock] = React.useState<{ id: string; port: number } | null>(null);
   const [mockError, setMockError] = React.useState<string | null>(null);
 
+  // every setMock goes through here so the top bar hears about it too — one
+  // call site rather than one at each of start, stop and reload-adopt
+  const updateMock = (next: { id: string; port: number } | null) => {
+    setMock(next);
+    onMockStatusChange?.(next);
+  };
+
   // A mock outlives the page that started it — the backend keeps it running
   // through a reload. Without this, that mock has no Stop button left
   // anywhere and starting another leaks a second one alongside it. The last
@@ -204,7 +225,7 @@ export default function Sidebar({
       .then((all) => {
         if (cancelled || all.length === 0) return;
         const survivor = all[all.length - 1];
-        setMock(survivor);
+        updateMock(survivor);
         all.slice(0, -1).forEach((m) => onStopMock(m.id).catch(() => {}));
       })
       .catch(() => {});
@@ -219,9 +240,9 @@ export default function Sidebar({
     try {
       if (mock) {
         await onStopMock(mock.id);
-        setMock(null);
+        updateMock(null);
       } else {
-        setMock(await onStartMock());
+        updateMock(await onStartMock());
       }
     } catch (err: any) {
       setMockError(err?.response?.data?.error || "Mock server failed");
@@ -491,6 +512,43 @@ export default function Sidebar({
           <Text style={styles.exportText}>{postmanImportNote || "Import Postman from clipboard"}</Text>
         </Pressable>
       </View>
+
+      {/* stays up until dismissed or replaced by the next import — the toast
+          that reports the same thing is gone in 8 seconds, and the tab bar
+          gives no other sign of which tabs just changed */}
+      {!!lastImported && lastImported.length > 0 && (
+        <View style={styles.importedPanel}>
+          <View style={styles.importedHeader}>
+            <Text style={styles.importedTitle}>Imported {lastImported.length}</Text>
+            <Pressable
+              accessibilityLabel="dismiss the imported list"
+              onPress={onDismissImported}
+              style={({ hovered: h }: any) => [styles.importedDismiss, h && styles.importedDismissHover]}
+            >
+              <Icon name="close" size={12} color={colors.textDim} />
+            </Pressable>
+          </View>
+          {lastImported.map((item) => (
+            <Pressable
+              key={item.id}
+              style={({ hovered: h }: any) => [styles.importedRow, h && styles.importedRowHover]}
+              onPress={() => onSelectImportedTab(item.id)}
+            >
+              <Text
+                style={[
+                  styles.method,
+                  { color: (colors.method as any)[item.method] || colors.text },
+                ]}
+              >
+                {item.method}
+              </Text>
+              <Text style={styles.importedLabel} numberOfLines={1}>
+                {item.label}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       {/* a fake server on these requests' own shapes, for building against
           before the real one answers — or without hitting it at all. starting
@@ -921,6 +979,56 @@ const styles = StyleSheet.create({
     ...transition("background-color"),
   },
   collectionRow: { flexDirection: "row", gap: 6 },
+  importedPanel: {
+    backgroundColor: colors.surfaceLight,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    gap: 2,
+  },
+  importedHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingBottom: 4,
+    marginBottom: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  importedTitle: {
+    color: colors.textDim,
+    fontSize: 10,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    letterSpacing: 0.3,
+  },
+  importedDismiss: {
+    padding: 3,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  importedDismissHover: {
+    backgroundColor: colors.hover,
+  },
+  importedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    borderRadius: radius.sm,
+    ...transition("background-color"),
+  },
+  importedRowHover: {
+    backgroundColor: colors.hover,
+  },
+  importedLabel: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 12,
+  },
   exportBtn: {
     paddingVertical: 6,
     paddingHorizontal: 9,

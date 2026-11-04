@@ -117,6 +117,11 @@ export default function Sidebar({
   const [search, setSearch] = React.useState("");
   const [activePath, setActivePath] = React.useState<string | null>(null);
   const [showVars, setShowVars] = React.useState(false);
+  // OpenAPI, the collection file, Postman both ways — six stacked buttons
+  // ahead of the endpoint list itself, the thing this panel exists to show.
+  // Collapsed the same way Variables already is, since most of a session
+  // never touches any of them.
+  const [showTools, setShowTools] = React.useState(false);
   const [specCopied, setSpecCopied] = React.useState<string | null>(null);
 
   const activeEnvironment =
@@ -453,65 +458,80 @@ export default function Sidebar({
         </View>
       )}
 
-      {routes.length > 0 && (
-        <Pressable
-          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-          onPress={copySpec}
-        >
-          <Text style={styles.exportText}>{specCopied || "Copy as OpenAPI"}</Text>
-        </Pressable>
-      )}
+      {/* OpenAPI, the collection file, and Postman both ways — six buttons
+          nobody touches most sessions, collapsed the same way Variables is.
+          The mock toggle stays outside this: it carries live state (BASE_URL
+          is pointed at it right now), and a "Stop mock" button that only a
+          reopened section can reach is a trap. */}
+      <Pressable style={styles.varsHeader} onPress={() => setShowTools(!showTools)}>
+        <Icon name={showTools ? "chevronDown" : "chevronRight"} size={12} color={colors.textDim} />
+        <Text style={styles.fieldLabel}>Import / Export</Text>
+      </Pressable>
 
-      {/* The requests themselves, as a file in the project. Separate from the
-          OpenAPI export above, which describes the routes the scan found: this
-          is what was built on top of them — what each one sends, asserts and
-          hands to the next — and it is the file `reqflow run` replays. */}
-      {onSaveCollection && (
-        <View style={styles.collectionRow}>
-          <Pressable
-            style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-            onPress={saveCollectionFile}
-          >
-            <Text style={styles.exportText}>{collectionNote || "Save collection"}</Text>
-          </Pressable>
-          {onLoadCollection && (
+      {showTools && (
+        <View style={styles.toolsBox}>
+          {routes.length > 0 && (
             <Pressable
               style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-              onPress={loadCollectionFile}
+              onPress={copySpec}
             >
-              <Text style={styles.exportText}>Load</Text>
+              <Text style={styles.exportText}>{specCopied || "Copy as OpenAPI"}</Text>
             </Pressable>
           )}
+
+          {/* The requests themselves, as a file in the project. Separate from
+              the OpenAPI export above, which describes the routes the scan
+              found: this is what was built on top of them — what each one
+              sends, asserts and hands to the next — and it is the file
+              `reqflow run` replays. */}
+          {onSaveCollection && (
+            <View style={styles.collectionRow}>
+              <Pressable
+                style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+                onPress={saveCollectionFile}
+              >
+                <Text style={styles.exportText}>{collectionNote || "Save collection"}</Text>
+              </Pressable>
+              {onLoadCollection && (
+                <Pressable
+                  style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+                  onPress={loadCollectionFile}
+                >
+                  <Text style={styles.exportText}>Load</Text>
+                </Pressable>
+              )}
+            </View>
+          )}
+
+          {/* the same requests, in Postman's format — for an existing Postman
+              user who wants to keep working there instead */}
+          <View style={styles.collectionRow}>
+            <Pressable
+              style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+              onPress={copyPostmanCollection}
+            >
+              <Text style={styles.exportText}>{postmanCopied || "Copy Postman collection"}</Text>
+            </Pressable>
+            <Pressable
+              style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+              onPress={copyPostmanEnvironment}
+            >
+              <Text style={styles.exportText}>Copy Postman env</Text>
+            </Pressable>
+          </View>
+
+          {/* the same direction reversed — a collection copied out of
+              Postman, pasted back in as tabs */}
+          <View style={styles.collectionRow}>
+            <Pressable
+              style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
+              onPress={importPostmanFromClipboard}
+            >
+              <Text style={styles.exportText}>{postmanImportNote || "Import Postman from clipboard"}</Text>
+            </Pressable>
+          </View>
         </View>
       )}
-
-      {/* the same requests, in Postman's format — for an existing Postman
-          user who wants to keep working there instead */}
-      <View style={styles.collectionRow}>
-        <Pressable
-          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-          onPress={copyPostmanCollection}
-        >
-          <Text style={styles.exportText}>{postmanCopied || "Copy Postman collection"}</Text>
-        </Pressable>
-        <Pressable
-          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-          onPress={copyPostmanEnvironment}
-        >
-          <Text style={styles.exportText}>Copy Postman env</Text>
-        </Pressable>
-      </View>
-
-      {/* the same direction reversed — a collection copied out of Postman,
-          pasted back in as tabs */}
-      <View style={styles.collectionRow}>
-        <Pressable
-          style={({ hovered: h }: any) => [styles.exportBtn, h && styles.exportBtnHover]}
-          onPress={importPostmanFromClipboard}
-        >
-          <Text style={styles.exportText}>{postmanImportNote || "Import Postman from clipboard"}</Text>
-        </Pressable>
-      </View>
 
       {/* stays up until dismissed or replaced by the next import — the toast
           that reports the same thing is gone in 8 seconds, and the tab bar
@@ -1055,6 +1075,10 @@ const styles = StyleSheet.create({
   },
   varsBox: {
     marginBottom: 12,
+  },
+  toolsBox: {
+    marginBottom: 8,
+    gap: 6,
   },
   varRow: {
     flexDirection: "row",

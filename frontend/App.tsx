@@ -250,9 +250,19 @@ export default function App() {
   // actually happened, not meant to move with the environment later
   const baseUrl = vars.BASE_URL || "";
 
-  // what BASE_URL pointed at, and where, right before the mock server
-  // redirected it — so stopping the mock can put it back
-  const mockRedirect = React.useRef<{ envId: string; previousBaseUrl: string } | null>(null);
+  // What BASE_URL pointed at, and where, right before the mock server
+  // redirected it — so stopping the mock can put it back. Persisted, not just
+  // a ref: the mock itself is an in-memory http.Server that dies with the
+  // backend process, so quitting the app while a mock is running loses the
+  // mock but not this — a plain ref would leave BASE_URL pointing at a port
+  // nothing is listening on any more, forever, with no record of what it
+  // should revert to. checkMockOrphaned below is what actually reverts it,
+  // once the backend confirms nothing is running there any more.
+  const [mockRedirect, setMockRedirect] = useState<{
+    envId: string;
+    port: number;
+    previousBaseUrl: string;
+  } | null>(null);
   // the sidebar owns starting, stopping and reconciling the mock after a
   // reload; this is only a copy of its answer, for the top bar's badge —
   // "Running 127.0.0.1:53748" reads exactly like a real server came up, and
@@ -407,6 +417,7 @@ export default function App() {
         setGeneratedRoutes(saved.generatedRoutes || []);
         setAppliedSummaries(saved.appliedSummaries || {});
         setRuns(saved.runs || []);
+        setMockRedirect(saved.mockRedirect || null);
       }
       if (!cancelled) setHydrated(true);
     })();
@@ -440,10 +451,36 @@ export default function App() {
         generatedRoutes,
         appliedSummaries,
         runs,
+        mockRedirect,
       });
     }, 400);
     return () => clearTimeout(id);
-  }, [hydrated, environments, activeEnvironmentId, projectName, routes, tabs, activeTabId, history, timings, recentScans, projectPath, instructions, examples, exampleLimit, generatedCode, generatedRoutes, appliedSummaries, runs]);
+  }, [hydrated, environments, activeEnvironmentId, projectName, routes, tabs, activeTabId, history, timings, recentScans, projectPath, instructions, examples, exampleLimit, generatedCode, generatedRoutes, appliedSummaries, runs, mockRedirect]);
+
+  // A mock redirect that outlives its own mock: the mock is an in-memory
+  // http.Server that dies with the backend process, so quitting the app
+  // while one is running leaves this restored from disk pointing at a port
+  // nothing answers on any more. Checked once hydration has actually
+  // restored it — checking any earlier would run against the initial
+  // (still null) state, before loadWorkspace has had the chance to say
+  // otherwise, and revert nothing.
+  React.useEffect(() => {
+    if (!hydrated || !mockRedirect) return;
+    let cancelled = false;
+    listMockServers()
+      .then((all) => {
+        if (cancelled) return;
+        const stillRunning = all.some((m) => m.port === mockRedirect.port);
+        if (!stillRunning) {
+          setEnvironmentVariable("BASE_URL", mockRedirect.previousBaseUrl, mockRedirect.envId);
+          setMockRedirect(null);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, mockRedirect]);
 
   // what ReqFlow is running, kept current so the offer to stop it is real
   const refreshRunning = React.useCallback(async () => {
@@ -1606,15 +1643,15 @@ export default function App() {
             const info = await startMockServer(
               tabs.map((t) => ({ method: t.method, url: t.url, sampleResponse: t.response?.data }))
             );
-            mockRedirect.current = { envId: activeEnvironmentId, previousBaseUrl: baseUrl };
+            setMockRedirect({ envId: activeEnvironmentId, port: info.port, previousBaseUrl: baseUrl });
             setEnvironmentVariable("BASE_URL", `http://127.0.0.1:${info.port}`, activeEnvironmentId);
             return info;
           }}
           onStopMock={async (id) => {
             await stopMockServer(id);
-            if (mockRedirect.current) {
-              setEnvironmentVariable("BASE_URL", mockRedirect.current.previousBaseUrl, mockRedirect.current.envId);
-              mockRedirect.current = null;
+            if (mockRedirect) {
+              setEnvironmentVariable("BASE_URL", mockRedirect.previousBaseUrl, mockRedirect.envId);
+              setMockRedirect(null);
             }
           }}
           onListMocks={listMockServers}

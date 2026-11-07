@@ -70,6 +70,12 @@ export interface Workspace {
   generatedRoutes: GeneratedRoute[];
   appliedSummaries: Record<string, ApplyOutcome>;
   runs: RunRecord[];
+  // What BASE_URL pointed at before a mock server redirected it, so the
+  // redirect can be undone. The mock itself is an in-memory http.Server that
+  // dies with the backend process — quitting the app while one is running
+  // loses the mock but not this record, so without persisting it BASE_URL is
+  // left pointing at a port nothing is listening on any more, forever.
+  mockRedirect: { envId: string; port: number; previousBaseUrl: string } | null;
 }
 
 // tabId -> headerName -> value
@@ -289,6 +295,16 @@ export async function loadWorkspace(): Promise<Workspace | null> {
         ? parsed.appliedSummaries
         : {},
     runs: onlyRealRuns(parsed.runs),
+    // shaped rather than passed through raw, so a corrupted or older-shaped
+    // value cannot resolve truthy and revert BASE_URL to something that was
+    // never actually a mock redirect
+    mockRedirect:
+      parsed.mockRedirect &&
+      typeof parsed.mockRedirect.envId === "string" &&
+      typeof parsed.mockRedirect.port === "number" &&
+      typeof parsed.mockRedirect.previousBaseUrl === "string"
+        ? parsed.mockRedirect
+        : null,
   };
 }
 
